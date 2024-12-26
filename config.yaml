@@ -1,0 +1,44 @@
+log:
+  level: info
+  format: json
+  caller: false
+
+executor:
+  datasources:
+    - name: staging-postgres
+      postgres:
+        url: "postgres://pglogrepl:secret@127.0.0.1:5432/pglogrepl?replication=database"
+
+    - name: staging-kafka
+      kafka:
+        brokers: ["localhost:9092"]
+
+  connectors:
+    - id: staging->staging
+      from: staging-postgres
+      to: staging-kafka
+      # default behaviour
+      allCollections: true
+      # override for specific tables
+      # mapping:
+      #   - from: users
+      #     to: users-topic
+      #     # map only name field from users table
+      #     fields:
+      #       - name: name
+
+    # - id: staging->staging
+    #   from: staging-postgres
+    #   to: staging-kafka
+    #   mapping:
+    #     - from: posts
+    #       to: posts-topic
+    #       # map all fields (default behaviour)
+    #       allFields: true
+    #     - from: users
+    #       to: users-topic
+    #       where: "email LIKE '%@gmail.com'"
+    #       fields:
+    #         - name: name
+    #           transform: "uppercase"
+    #         - name: email
