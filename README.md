@@ -72,4 +72,4 @@ TODO:
 
 ## Contribute
 
-Sequin is open source (MIT license). The project is just getting started, so the best way to contribute right now is to open an issue or join the [Discord Server](https://discord.gg/BV8wFXvNtY) and let us know what you want to build.
+Sequin is open source (MIT license). The project is just getting started, so the best way to contribute right now is to open an issue.
