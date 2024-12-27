@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dtunikov/go-kafka-connector/internal/datasource"
+	"github.com/dtunikov/go-db-stream/internal/datasource"
 	"github.com/google/uuid"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"

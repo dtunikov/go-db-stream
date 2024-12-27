@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/dtunikov/go-kafka-connector/internal/config"
-	"github.com/dtunikov/go-kafka-connector/internal/connector"
-	"github.com/dtunikov/go-kafka-connector/internal/services/datasources"
+	"github.com/dtunikov/go-db-stream/internal/config"
+	"github.com/dtunikov/go-db-stream/internal/connector"
+	"github.com/dtunikov/go-db-stream/internal/services/datasources"
 	"go.uber.org/zap"
 )
 

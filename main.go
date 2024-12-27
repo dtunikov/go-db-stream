@@ -12,15 +12,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dtunikov/go-kafka-connector/internal/config"
-	"github.com/dtunikov/go-kafka-connector/internal/executor"
-	"github.com/dtunikov/go-kafka-connector/pkg/logger"
+	"github.com/dtunikov/go-db-stream/internal/config"
+	"github.com/dtunikov/go-db-stream/internal/executor"
+	"github.com/dtunikov/go-db-stream/pkg/logger"
 
 	"go.uber.org/zap"
 )
 
 var (
-	configPathFlag = flag.String("config", os.Getenv("CONFIG_PATH"), "Path to the router config file e.g. config.yaml")
+	configPathFlag = flag.String("config", os.Getenv("CONFIG_PATH"), "Path to the config file e.g. config.yaml")
 	help           = flag.Bool("help", false, "Prints the help message")
 )
 

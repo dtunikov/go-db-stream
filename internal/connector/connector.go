@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dtunikov/go-kafka-connector/internal/config"
-	"github.com/dtunikov/go-kafka-connector/internal/datasource"
-	"github.com/dtunikov/go-kafka-connector/internal/services/datasources"
+	"github.com/dtunikov/go-db-stream/internal/config"
+	"github.com/dtunikov/go-db-stream/internal/datasource"
+	"github.com/dtunikov/go-db-stream/internal/services/datasources"
 	"go.uber.org/zap"
 )
 

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dtunikov/go-kafka-connector/internal/config"
-	"github.com/dtunikov/go-kafka-connector/internal/datasource"
+	"github.com/dtunikov/go-db-stream/internal/config"
+	"github.com/dtunikov/go-db-stream/internal/datasource"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 )

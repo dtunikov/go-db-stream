@@ -1,4 +1,4 @@
-module github.com/dtunikov/go-kafka-connector
+module github.com/dtunikov/go-db-stream
 
 go 1.23.4
 
