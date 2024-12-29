@@ -11,6 +11,7 @@ import (
 func NewLogger(level string) (*zap.Logger, error) {
 	logEncoder := zap.NewProductionEncoderConfig()
 	logEncoder.TimeKey = "time"
+	logEncoder.EncodeTime = zapcore.ISO8601TimeEncoder
 	logLevel, err := zapcore.ParseLevel(level)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse log level: %w", err)

@@ -11,9 +11,10 @@ import (
 )
 
 type KafkaDatasource struct {
-	writer *kafka.Writer
-	cfg    config.KafkaDatasource
-	logger *zap.Logger
+	adminConn *kafka.Conn
+	writer    *kafka.Writer
+	cfg       config.KafkaDatasource
+	logger    *zap.Logger
 }
 
 func NewKafkaDatasource(cfg config.KafkaDatasource, logger *zap.Logger) (*KafkaDatasource, error) {
@@ -21,11 +22,29 @@ func NewKafkaDatasource(cfg config.KafkaDatasource, logger *zap.Logger) (*KafkaD
 		return nil, fmt.Errorf("no brokers provided")
 	}
 
+	conn, err := selectBroker(cfg.Brokers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select broker: %w", err)
+	}
+
 	w := kafka.NewWriter(kafka.WriterConfig{
 		Brokers: cfg.Brokers,
 	})
 
-	return &KafkaDatasource{w, cfg, logger.With(zap.String("datasource-type", "kafka"))}, nil
+	return &KafkaDatasource{conn, w, cfg, logger.With(zap.String("datasource-type", "kafka"))}, nil
+}
+
+func selectBroker(brokers []string) (*kafka.Conn, error) {
+	for _, broker := range brokers {
+		// Try to connect to the broker
+		conn, err := kafka.Dial("tcp", broker)
+		if err == nil {
+			// Connection successful, close it and return the broker
+			conn.Close()
+			return conn, nil
+		}
+	}
+	return nil, fmt.Errorf("failed to connect to any broker")
 }
 
 func (k *KafkaDatasource) HealthCheck(ctx context.Context) error {

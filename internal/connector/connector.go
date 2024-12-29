@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/dtunikov/go-db-stream/internal/config"
 	"github.com/dtunikov/go-db-stream/internal/datasource"
@@ -83,12 +82,13 @@ Outer:
 			// TODO: we could actually filter the message here instead of filtering it inside readable datasource code, BUT that would mean that we would have to read the message and unmarshal it to check if it should be filtered
 			// sometimes it is better to filter the message as soon as possible (so on)
 			// TODO: take timeout from config
-			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := c.to.Write(ctx, msg)
-			cancel()
+			// ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := c.to.Write(context.Background(), msg)
+			// cancel()
 			if err != nil {
 				c.logger.Error("could not write message", zap.Error(err))
 			}
+			c.logger.Debug("successfully written message!")
 		}
 	}
 

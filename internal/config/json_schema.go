@@ -2,6 +2,7 @@ package config
 
 import (
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -68,6 +69,7 @@ func (d duration) Validate(ctx *jsonschema.ValidatorContext, v any) {
 			})
 			return
 		}
+
 	}
 }
 
@@ -147,7 +149,9 @@ type humanBytes struct {
 	max uint64
 }
 
-var _ jsonschema.ErrorKind = (*validationErrorKind)(nil)
+var (
+	_ jsonschema.ErrorKind = (*validationErrorKind)(nil)
+)
 
 type validationErrorKind struct {
 	message string
@@ -163,6 +167,7 @@ func (v validationErrorKind) LocalizedString(printer *message.Printer) string {
 }
 
 func (d humanBytes) Validate(ctx *jsonschema.ValidatorContext, v any) {
+
 	val, ok := v.(string)
 	if !ok {
 		ctx.AddError(&validationErrorKind{
@@ -199,6 +204,7 @@ func (d humanBytes) Validate(ctx *jsonschema.ValidatorContext, v any) {
 			})
 			return
 		}
+
 	}
 }
 
@@ -281,7 +287,13 @@ var (
 	hostnameRegexRFC1123 = regexp.MustCompile(hostnameRegexStringRFC1123)
 )
 
-func ValidateConfig(yamlData []byte, schemaLoc string) error {
+func ValidateConfig(yamlData []byte, schema []byte) error {
+	var s any
+	err := json.Unmarshal(schema, &s)
+	if err != nil {
+		return err
+	}
+
 	var v any
 	if err := yaml.Unmarshal(yamlData, &v); err != nil {
 		log.Fatal(err)
@@ -321,7 +333,7 @@ func ValidateConfig(yamlData []byte, schemaLoc string) error {
 	c.RegisterVocabulary(goDurationVocab())
 	c.RegisterVocabulary(humanBytesVocab())
 
-	sch, err := c.Compile(schemaLoc)
+	sch, err := c.Compile("./internal/config/config.schema.json")
 	if err != nil {
 		return err
 	}

@@ -32,6 +32,10 @@ func serve() error {
 		os.Exit(0)
 	}
 
+	if *configPathFlag == "" {
+		return fmt.Errorf("config path is required")
+	}
+
 	cfg, err := config.LoadConfig(*configPathFlag)
 	if err != nil {
 		return fmt.Errorf("could not load config: %w", err)
@@ -41,6 +45,7 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("could not create logger: %w", err)
 	}
+	defer logger.Sync()
 
 	executor, err := executor.NewExecutor(cfg.Executor, logger)
 	if err != nil {

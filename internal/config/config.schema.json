@@ -3,9 +3,121 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "example": {
-      "type": "string",
-      "description": "Example config property."
+    "log": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "description": "Log level.",
+          "default": "info",
+          "enum": ["trace", "debug", "info", "warn", "error", "fatal"]
+        }
+      }
+    },
+    "executor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["datasources", "connectors"],
+      "properties": {
+        "datasources": {
+          "type": "array",
+          "description": "List of datasources.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Datasource id."
+              },
+              "postgres": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["url"],
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "Postgres connection URL."
+                  },
+                  "publications": {
+                    "type": "array",
+                    "description": "List of publications to use. See https://www.postgresql.org/docs/current/sql-createpublication.html",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "createPublications": {
+                    "type": "array",
+                    "description": "List of publications to create. See https://www.postgresql.org/docs/current/sql-createpublication.html",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "kafka": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["brokers"],
+                "properties": {
+                  "brokers": {
+                    "type": "array",
+                    "description": "List of Kafka brokers.",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "connectors": {
+          "type": "array",
+          "description": "List of connectors.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "from", "to"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Connector id."
+              },
+              "from": {
+                "type": "string",
+                "description": "ID of a datasource from which the data should be streamed."
+              },
+              "to": {
+                "type": "string",
+                "description": "ID of a datasource to which the data should be streamed."
+              },
+              "allCollections": {
+                "type": "boolean",
+                "description": "Stream all collections from the source datasource to the target datasource.",
+                "default": true
+              },
+              "mapping": {
+                "type": "object",
+                "description": "Mapping of collections from the source datasource to the target datasource."
+              }
+            }
+          }
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "integer",
+          "description": "Port to listen on.",
+          "default": 8080
+        }
+      }
     }
   }
 }

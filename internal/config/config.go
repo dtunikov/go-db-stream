@@ -4,12 +4,19 @@ import (
 	"fmt"
 	"os"
 
+	_ "embed"
+
 	"github.com/caarlos0/env/v11"
 	"github.com/goccy/go-yaml"
 )
 
+//go:embed config.schema.json
+var configSchema []byte
+
 type PostgresDatasource struct {
-	Url string `yaml:"url"`
+	Url                string   `yaml:"url"`
+	Publications       []string `yaml:"publications"`
+	CreatePublications []string `yaml:"createPublications"`
 }
 
 type KafkaDatasource struct {
@@ -36,13 +43,11 @@ type Connector struct {
 }
 
 type Log struct {
-	Level       string `yaml:"level" envDefault:"info" env:"LOG_LEVEL"`
-	Format      string `yaml:"format" envDefault:"json" env:"LOG_FORMAT"`
-	PrintCaller bool   `yaml:"printCaller" envDefault:"false" env:"LOG_PRINT_CALLER"`
+	Level string `yaml:"level" envDefault:"info" env:"LOG_LEVEL"`
 }
 
 type Datasource struct {
-	Id       string              `yaml:"name"`
+	Id       string              `yaml:"id"`
 	Postgres *PostgresDatasource `yaml:"postgres"`
 	Kafka    *KafkaDatasource    `yaml:"kafka"`
 }
@@ -53,7 +58,7 @@ type Executor struct {
 }
 
 type Server struct {
-	Port int `yaml:"port" envDefault:"8080"`
+	Port int `yaml:"port"`
 }
 
 type Config struct {
@@ -65,36 +70,27 @@ type Config struct {
 func LoadConfig(configFilePath string) (*Config, error) {
 	cfg := Config{}
 
-	// Try to load the environment variables into the config
+	// evaluate environment variables and default values
 	err := env.Parse(&cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// only if the config file path is provided we will load the config from the file
-	if configFilePath != "" {
-		configFileBytes, err := os.ReadFile(configFilePath)
-		if err != nil {
-			return nil, fmt.Errorf("could not read custom config file %s: %w", configFilePath, err)
-		}
+	configFileBytes, err := os.ReadFile(configFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("could not read custom config file %s: %w", configFilePath, err)
+	}
 
-		configYamlData := os.ExpandEnv(string(configFileBytes))
-		if err := yaml.Unmarshal([]byte(configYamlData), &cfg); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal router config: %w", err)
-		}
+	configYamlData := os.ExpandEnv(string(configFileBytes))
+	if err := yaml.Unmarshal([]byte(configYamlData), &cfg); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal router config: %w", err)
+	}
 
-		// Validate the config against the JSON schema
-		configFileBytes = []byte(configYamlData)
-		// TODO: Implement JSON schema validation
-		// err = ValidateConfig(configFileBytes, "config.schema.json")
-		// if err != nil {
-		// 	return nil, fmt.Errorf("router config validation error: %w", err)
-		// }
-
-		// Unmarshal the final config
-		if err := yaml.Unmarshal(configFileBytes, &cfg); err != nil {
-			return nil, err
-		}
+	// Validate the config against the JSON schema
+	configFileBytes = []byte(configYamlData)
+	err = ValidateConfig(configFileBytes, configSchema)
+	if err != nil {
+		return nil, fmt.Errorf("router config validation error: %w", err)
 	}
 
 	return &cfg, nil

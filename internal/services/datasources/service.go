@@ -26,19 +26,16 @@ func NewService(datasourcesConfig []config.Datasource, logger *zap.Logger) (*Ser
 			if err != nil {
 				return nil, fmt.Errorf("could not create kafka datasource: %w", err)
 			}
-		}
-		if ds.Postgres != nil {
-			created, err = postgres.NewPostgresDatasource(context.Background(), ds.Postgres.Url, dsLogger)
+		} else if ds.Postgres != nil {
+			created, err = postgres.NewPostgresDatasource(context.Background(), *ds.Postgres, dsLogger)
 			if err != nil {
 				return nil, fmt.Errorf("could not create postgres datasource: %w", err)
 			}
-		}
-
-		if created != nil {
-			datasources[ds.Id] = created
 		} else {
 			return nil, fmt.Errorf("could not create datasource, unknown type")
 		}
+
+		datasources[ds.Id] = created
 	}
 
 	return &Service{

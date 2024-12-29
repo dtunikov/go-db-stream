@@ -1,25 +1,25 @@
 log:
-  level: info
-  format: json
-  caller: false
+  level: debug
 
 executor:
   datasources:
-    - name: staging-postgres
+    - id: postgres1
       postgres:
-        url: "postgres://pglogrepl:secret@127.0.0.1:5432/pglogrepl?replication=database"
+        # ensure that pgstreamer has been created and the user has replication privileges
+        url: "postgres://postgres:postgres@localhost:5432/postgres"
+        # SQL command to create publication if it does not exist. See examples here: https://www.postgresql.org/docs/current/sql-createpublication.html
+        createPublications: ['CREATE PUBLICATION demo_publication FOR ALL TABLES;']
 
-    - name: staging-kafka
+    - id: kafka1
       kafka:
         brokers: ["localhost:9092"]
 
   connectors:
-    - id: staging->staging
-      from: staging-postgres
-      to: staging-kafka
-      # default behaviour
+    - id: postgres1->kafka1
+      from: postgres1
+      to: kafka1
       allCollections: true
-      # override for specific tables
+      # only stream specific tables (default behaviour is to stream all tables)
       # mapping:
       #   - from: users
       #     to: users-topic

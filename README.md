@@ -53,7 +53,7 @@ go-db-stream makes it easy to stream changes from your database to streaming pla
 
 ## Getting started
 
-TODO:
+To get started, you can follow the examples in the `examples` directory. Each example demonstrates how to stream changes from a database to a sink like Kafka, SQS, or HTTP endpoints.
 
 ## How it works?
 
