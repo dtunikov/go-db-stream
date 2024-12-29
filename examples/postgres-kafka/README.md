@@ -2,6 +2,8 @@
 
 This example demonstrates how to stream changes from a Postgres database to a Kafka topic using the `go-db-stream`.
 Instructions on how to run this example:
+- clone the repository `git clone git@github.com:dtunikov/go-db-stream.git`
+- navigate to the example directory `cd go-db-stream/examples/postgres-kafka`
 - run `docker-compose up -d --build` to start the services (tested with Docker Compose version v2.30.3-desktop.1)
 - wait until the services are up and running (go-db-stream, postgres, kafka, zookeeper)
 - create users table in postgres database by running  
