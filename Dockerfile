@@ -17,6 +17,7 @@ RUN addgroup -g 1000 nonroot && \
   adduser -D -u 1000 -G nonroot nonroot
 USER nonroot:nonroot
 
+COPY internal/config/config.schema.json ./internal/config/
 COPY --from=build /app/go-db-stream ./
 
 ENV PATH="/app:${PATH}"
