@@ -39,7 +39,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           username: dmitrii@spread.ai
-          password: ${{ secrets.GH_PUSH_PACKAGES }}
+          password: ${{ secrets.GH_TOKEN }}
           registry: ghcr.io
 
       - name: Build and Push
