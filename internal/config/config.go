@@ -10,9 +10,6 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-//go:embed config.schema.json
-var configSchema []byte
-
 type PostgresDatasource struct {
 	Url                string   `yaml:"url"`
 	Publications       []string `yaml:"publications"`
@@ -88,7 +85,7 @@ func LoadConfig(configFilePath string) (*Config, error) {
 
 	// Validate the config against the JSON schema
 	configFileBytes = []byte(configYamlData)
-	err = ValidateConfig(configFileBytes, configSchema)
+	err = ValidateConfig(configFileBytes)
 	if err != nil {
 		return nil, fmt.Errorf("router config validation error: %w", err)
 	}
