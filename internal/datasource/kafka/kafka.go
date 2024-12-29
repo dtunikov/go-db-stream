@@ -131,6 +131,12 @@ func (k *KafkaDatasource) Write(ctx context.Context, msg datasource.Message) err
 	// TODO: exclude data from logs in production mode
 	k.logger.Debug("writing message", zap.String("collection", msg.Collection), zap.ByteString("data", msg.Data))
 	err := k.writer.WriteMessages(ctx, kafka.Message{
+		Headers: []kafka.Header{
+			{
+				Key:   "operation",
+				Value: []byte(msg.Op),
+			},
+		},
 		Value: msg.Data,
 		Topic: msg.Collection,
 	})
@@ -138,5 +144,6 @@ func (k *KafkaDatasource) Write(ctx context.Context, msg datasource.Message) err
 		return fmt.Errorf("failed to write message: %w", err)
 	}
 
+	k.logger.Debug("message written successfully")
 	return nil
 }

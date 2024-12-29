@@ -373,6 +373,28 @@ func (p *PostgresDatasource) processUpdate(logicalMsg *pglogrepl.UpdateMessageV2
 	return nil
 }
 
+func (p *PostgresDatasource) processDelete(logicalMsg *pglogrepl.DeleteMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) error {
+	rel, ok := relations[logicalMsg.RelationID]
+	if !ok {
+		return fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
+	}
+
+	p.logger.Debug("delete for xid", zap.Uint32("xid", logicalMsg.Xid),
+		zap.String("namespace", rel.Namespace),
+		zap.String("relation_name", rel.RelationName),
+	)
+
+	values, err := p.extractData(rel, logicalMsg.OldTuple.Columns, sub)
+	if err != nil {
+		return fmt.Errorf("failed to extract data: %w", err)
+	}
+
+	data, _ := json.Marshal(values)
+	sub.Ch <- datasource.Message{Op: datasource.Delete, Data: data, Collection: rel.RelationName}
+
+	return nil
+}
+
 func (p *PostgresDatasource) processData(walData []byte, relations map[uint32]*pglogrepl.RelationMessageV2, inStream *bool, sub *subscription) error {
 	logicalMsg, err := pglogrepl.ParseV2(walData, *inStream)
 	if err != nil {
@@ -391,7 +413,7 @@ func (p *PostgresDatasource) processData(walData []byte, relations map[uint32]*p
 	case *pglogrepl.UpdateMessageV2:
 		return p.processUpdate(logicalMsg, relations, sub)
 	case *pglogrepl.DeleteMessageV2:
-		p.logger.Info("delete for xid", zap.Uint32("xid", logicalMsg.Xid))
+		return p.processDelete(logicalMsg, relations, sub)
 	case *pglogrepl.TruncateMessageV2:
 		p.logger.Info("truncate for xid", zap.Uint32("xid", logicalMsg.Xid))
 	case *pglogrepl.TypeMessageV2:

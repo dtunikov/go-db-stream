@@ -12,7 +12,7 @@ executor:
 
     - id: kafka1
       kafka:
-        brokers: ["localhost:9092"]
+        brokers: ["localhost:9094"]
 
   connectors:
     - id: postgres1->kafka1

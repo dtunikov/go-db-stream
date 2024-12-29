@@ -88,7 +88,6 @@ Outer:
 			if err != nil {
 				c.logger.Error("could not write message", zap.Error(err))
 			}
-			c.logger.Debug("successfully written message!")
 		}
 	}
 
