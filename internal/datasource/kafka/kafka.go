@@ -2,19 +2,24 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 
 	"github.com/dtunikov/go-db-stream/internal/config"
 	"github.com/dtunikov/go-db-stream/internal/datasource"
 	"github.com/segmentio/kafka-go"
+	"github.com/segmentio/kafka-go/sasl"
+	"github.com/segmentio/kafka-go/sasl/plain"
+	"github.com/segmentio/kafka-go/sasl/scram"
 	"go.uber.org/zap"
 )
 
 type KafkaDatasource struct {
-	adminConn *kafka.Conn
-	writer    *kafka.Writer
-	cfg       config.KafkaDatasource
-	logger    *zap.Logger
+	writer *kafka.Writer
+	cfg    config.KafkaDatasource
+	logger *zap.Logger
 }
 
 func NewKafkaDatasource(cfg config.KafkaDatasource, logger *zap.Logger) (*KafkaDatasource, error) {
@@ -22,29 +27,86 @@ func NewKafkaDatasource(cfg config.KafkaDatasource, logger *zap.Logger) (*KafkaD
 		return nil, fmt.Errorf("no brokers provided")
 	}
 
-	conn, err := selectBroker(cfg.Brokers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to select broker: %w", err)
+	dialer := &kafka.Dialer{}
+
+	if cfg.SASL != nil {
+		saslMechanism, err := saslMechanismFromConfig(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create SASL mechanism: %w", err)
+		}
+		dialer.SASLMechanism = saslMechanism
+	}
+
+	if cfg.TLS != nil {
+		tlsConfig, err := LoadTLSConfig(cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.TLS.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS config: %w", err)
+		}
+		dialer.TLS = tlsConfig
 	}
 
 	w := kafka.NewWriter(kafka.WriterConfig{
-		Brokers: cfg.Brokers,
+		Dialer:       dialer,
+		Brokers:      cfg.Brokers,
+		MaxAttempts:  cfg.MaxAttempts,
+		BatchSize:    cfg.BatchSize,
+		BatchBytes:   cfg.BatchBytes,
+		BatchTimeout: cfg.BatchTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		RequiredAcks: cfg.RequiredAcks,
+		Async:        cfg.Async,
 	})
 
-	return &KafkaDatasource{conn, w, cfg, logger.With(zap.String("datasource-type", "kafka"))}, nil
+	return &KafkaDatasource{w, cfg, logger.With(zap.String("datasource-type", "kafka"))}, nil
 }
 
-func selectBroker(brokers []string) (*kafka.Conn, error) {
-	for _, broker := range brokers {
-		// Try to connect to the broker
-		conn, err := kafka.Dial("tcp", broker)
-		if err == nil {
-			// Connection successful, close it and return the broker
-			conn.Close()
-			return conn, nil
-		}
+func LoadTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client certificate and key: %w", err)
 	}
-	return nil, fmt.Errorf("failed to connect to any broker")
+
+	caCert, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA file: %w", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
+		return nil, fmt.Errorf("failed to append CA certificate")
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caCertPool,
+	}, nil
+}
+
+func saslMechanismFromConfig(cfg config.KafkaDatasource) (sasl.Mechanism, error) {
+	var err error
+	var mechanism sasl.Mechanism
+	switch cfg.SASL.Mechanism {
+	case "plain":
+		mechanism = plain.Mechanism{
+			Username: cfg.SASL.Username,
+			Password: cfg.SASL.Password,
+		}
+	case "scram-sha-256":
+		mechanism, err = scram.Mechanism(scram.SHA512, cfg.SASL.Username, cfg.SASL.Password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create SCRAM mechanism: %w", err)
+		}
+	case "scram-sha-512":
+		mechanism, err = scram.Mechanism(scram.SHA512, cfg.SASL.Username, cfg.SASL.Password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create SCRAM mechanism: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported SASL mechanism: %s", cfg.SASL.Mechanism)
+	}
+
+	return mechanism, nil
 }
 
 func (k *KafkaDatasource) HealthCheck(ctx context.Context) error {
@@ -66,7 +128,8 @@ func (k *KafkaDatasource) HealthCheck(ctx context.Context) error {
 }
 
 func (k *KafkaDatasource) Write(ctx context.Context, msg datasource.Message) error {
-	k.logger.Info("writing message", zap.String("collection", msg.Collection), zap.ByteString("data", msg.Data))
+	// TODO: exclude data from logs in production mode
+	k.logger.Debug("writing message", zap.String("collection", msg.Collection), zap.ByteString("data", msg.Data))
 	err := k.writer.WriteMessages(ctx, kafka.Message{
 		Value: msg.Data,
 		Topic: msg.Collection,

@@ -68,6 +68,83 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "maxAttempts": {
+                    "type": "integer",
+                    "description": "Limit on how many attempts will be made to deliver a message.",
+                    "default": 10
+                  },
+                  "batchSize": {
+                    "type": "integer",
+                    "description": "Limit on how many messages will be buffered before being sent to a partition.",
+                    "default": 100
+                  },
+                  "batchBytes": {
+                    "type": "integer",
+                    "description": "Maximum size of a request in bytes before being sent to a partition.",
+                    "default": 1048576
+                  },
+                  "batchTimeout": {
+                    "type": "string",
+                    "description": "Time limit on how often incomplete message batches will be flushed to Kafka.",
+                    "default": "1s"
+                  },
+                  "readTimeout": {
+                    "type": "string",
+                    "description": "Timeout for read operations.",
+                    "default": "10s"
+                  },
+                  "writeTimeout": {
+                    "type": "string",
+                    "description": "Timeout for write operations.",
+                    "default": "10s"
+                  },
+                  "requiredAcks": {
+                    "type": "integer",
+                    "description": "Number of acknowledges from partition replicas required before receiving a response to a produce request.",
+                    "default": -1
+                  },
+                  "async": {
+                    "type": "boolean",
+                    "description": "Setting this flag to true causes the WriteMessages method to never block.",
+                    "default": false
+                  },
+                  "sasl": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "username": {
+                        "type": "string",
+                        "description": "Username for SASL/PLAIN authentication."
+                      },
+                      "password": {
+                        "type": "string",
+                        "description": "Password for SASL/PLAIN authentication."
+                      },
+                      "mechanism": {
+                        "type": "string",
+                        "description": "SASL mechanism to use for authentication.",
+                        "enum": ["plain", "scram-sha-256", "scram-sha-512"]
+                      }
+                    }
+                  },
+                  "tls": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "ca": {
+                        "type": "string",
+                        "description": "Path to the CA certificate file."
+                      },
+                      "cert": {
+                        "type": "string",
+                        "description": "Path to the client certificate file."
+                      },
+                      "key": {
+                        "type": "string",
+                        "description": "Path to the client key file."
+                      }
+                    }
                   }
                 }
               }
