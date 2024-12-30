@@ -9,6 +9,7 @@ executor:
         url: "postgres://postgres:postgres@localhost:5432/postgres"
         # SQL command to create publication if it does not exist. See examples here: https://www.postgresql.org/docs/current/sql-createpublication.html
         createPublications: ['CREATE PUBLICATION demo_publication FOR ALL TABLES;']
+        replicationSlot: 'test_slot'
 
     - id: kafka1
       kafka:

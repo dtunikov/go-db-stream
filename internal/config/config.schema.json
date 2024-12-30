@@ -41,6 +41,10 @@
                     "type": "string",
                     "description": "Postgres connection URL."
                   },
+                  "replicationSlot": {
+                    "type": "string",
+                    "description": "Name of the replication slot to use."
+                  },
                   "publications": {
                     "type": "array",
                     "description": "List of publications to use. See https://www.postgresql.org/docs/current/sql-createpublication.html",

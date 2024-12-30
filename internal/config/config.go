@@ -13,6 +13,7 @@ import (
 
 type PostgresDatasource struct {
 	Url                string   `yaml:"url"`
+	ReplicationSlot    string   `yaml:"replicationSlot"`
 	Publications       []string `yaml:"publications"`
 	CreatePublications []string `yaml:"createPublications"`
 }

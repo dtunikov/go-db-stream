@@ -13,7 +13,7 @@ Instructions on how to run this example:
 
 Now we're ready to test our go-db-stream. Let's create a new user in the users table and see if the changes are streamed to the Kafka topic.
 - start listening to kafka topic by running
-`docker exec kafka kafka-console-consumer --topic users --from-beginning --bootstrap-server localhost:9092`
+`docker exec kafka kafka-console-consumer --topic users --from-beginning --bootstrap-server localhost:9092 --property print.headers=true`
 - open another terminal and insert a new user in the users table by running
 `docker exec postgres-db psql -U postgres -d postgres -c "INSERT INTO users (name) VALUES ('Alice');"`
 - check the terminal where you're listening to the kafka topic. You should see the new user data being streamed!

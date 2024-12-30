@@ -30,6 +30,7 @@ type PostgresDatasource struct {
 	logger          *zap.Logger
 	sysident        pglogrepl.IdentifySystemResult
 	publications    []string
+	cfg             config.PostgresDatasource
 }
 
 type subscription struct {
@@ -109,6 +110,7 @@ func NewPostgresDatasource(ctx context.Context, cfg config.PostgresDatasource, l
 		logger.With(zap.String("datasource-type", "postgres")),
 		sysident,
 		publications,
+		cfg,
 	}, nil
 }
 
@@ -134,28 +136,32 @@ func (p *PostgresDatasource) Read(ctx context.Context, cfg datasource.ReadConfig
 			Ch:         make(chan datasource.Message),
 			ReadConfig: cfg,
 		},
-		slotName: "replica_" + strconv.Itoa(rand.Int()),
+		slotName: p.cfg.ReplicationSlot,
 		done:     make(chan struct{}),
 	}
 
-	// TODO: maybe take it from the config
-	outputPlugin := "pgoutput"
-	_, err := pglogrepl.CreateReplicationSlot(ctx, p.replicationConn, s.slotName, outputPlugin, pglogrepl.CreateReplicationSlotOptions{
-		// meaning that the slot will be dropped when the connection is closed
-		Temporary: true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create replication slot: %w", err)
+	// if the slot name is not provided, create a temporary one
+	if p.cfg.ReplicationSlot == "" {
+		s.slotName = "replica_" + strconv.Itoa(rand.Int())
+		_, err := pglogrepl.CreateReplicationSlot(ctx, p.replicationConn, s.slotName, "pgoutput", pglogrepl.CreateReplicationSlotOptions{
+			// meaning that the slot will be dropped when the connection is closed
+			Temporary: true,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create replication slot: %w", err)
+		}
+		p.logger.Info("created temporary replication slot", zap.String("slot_name", s.slotName))
 	}
-	p.logger.Info("created temporary replication slot", zap.String("slot_name", s.slotName))
+	p.logger.Info("using replication slot", zap.String("slot_name", s.slotName))
 
 	pluginArguments := []string{
 		"proto_version '2'",
 		fmt.Sprintf("publication_names '%s'", strings.Join(p.publications, ",")),
 		"messages 'true'",
+		// TODO: figure out in which cases this could be useful
 		// "streaming 'true'",
 	}
-	err = pglogrepl.StartReplication(context.Background(), p.replicationConn, s.slotName, p.sysident.XLogPos,
+	err := pglogrepl.StartReplication(context.Background(), p.replicationConn, s.slotName, p.sysident.XLogPos,
 		pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments})
 	if err != nil {
 		return nil, fmt.Errorf("start replication: %w", err)
@@ -247,7 +253,6 @@ Loop:
 					clientXLogPos = pkm.ServerWALEnd
 				}
 				if pkm.ReplyRequested {
-					// TODO: context with timeout
 					err := pglogrepl.SendStandbyStatusUpdate(context.Background(), p.replicationConn, pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
 					if err != nil {
 						p.logger.Error("SendStandbyStatusUpdate failed", zap.Error(err))
