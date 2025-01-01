@@ -12,6 +12,7 @@ services:
       go-db-stream -config /app/config.yaml
     ports:
       - "8080:8080"
+    restart: always
     depends_on:
       - postgres
       - kafka
@@ -26,11 +27,8 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./postgres-config/postgresql.conf:/etc/postgresql/postgresql.conf
-      - ./postgres-config/pg_hba.conf:/etc/postgresql/pg_hba.conf
-      # - ./postgres-config/init.sql:/docker-entrypoint-initdb.d/init.sql
     command: >
-      postgres -c config_file=/etc/postgresql/postgresql.conf
+      postgres -c wal_level=logical
     restart: always
 
   zookeeper:

@@ -22,12 +22,14 @@ type KafkaDatasource struct {
 	// Brokers is a list of kafka brokers to connect to.
 	Brokers []string `yaml:"brokers"`
 
+	// TLS configuration for the kafka connection.
 	TLS *struct {
 		CertFile string `yaml:"certFile"`
 		KeyFile  string `yaml:"keyFile"`
 		CAFile   string `yaml:"caFile"`
 	}
 
+	// SASL auth configuration for the kafka connection.
 	SASL *struct {
 		Username  string `yaml:"username"`
 		Password  string `yaml:"password"`

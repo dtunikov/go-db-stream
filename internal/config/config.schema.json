@@ -43,7 +43,7 @@
                   },
                   "replicationSlot": {
                     "type": "string",
-                    "description": "Name of the replication slot to use."
+                    "description": "Name of the replication slot to use. If not set, a new temporary slot will be used."
                   },
                   "publications": {
                     "type": "array",
