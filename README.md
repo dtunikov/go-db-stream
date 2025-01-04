@@ -67,8 +67,12 @@ For configuration, you can define setups as code using straightforward YAML conf
 
 ## Benchmarks
 
-TODO:
+| Setup | Latency | RPS |
+|-------|---------|-----|
+| Postgres -> Kafka | 500ms | 100 |
 
+Latency shows how long it takes for the message to be streamed from Postgres to Kafka (Kafka message timestamp - Postgres created_at row field).
+See the `examples/[example]/benchmark` directory for benchmarking scripts and instructions on how to run them.
 
 ## Contribute
 

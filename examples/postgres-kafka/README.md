@@ -7,7 +7,7 @@ Instructions on how to run this example:
 - run `docker-compose up -d --build` to start the services (tested with Docker Compose version v2.30.3-desktop.1)
 - wait until the services are up and running (go-db-stream, postgres, kafka, zookeeper)
 - create users table in postgres database by running  
-`docker exec postgres-db psql -U postgres -d postgres -c 'CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name VARCHAR(100));'`
+`docker exec postgres-db psql -U postgres -d postgres -c 'CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name VARCHAR(100), created_at TIMESTAMP DEFAULT NOW());'`
 - create 'users' topic in kafka by running  
 `docker exec kafka kafka-topics --create --topic users --bootstrap-server localhost:9092`
 

@@ -152,7 +152,6 @@ func (p *PostgresDatasource) Read(ctx context.Context, cfg datasource.ReadConfig
 		}
 		p.logger.Info("created temporary replication slot", zap.String("slot_name", s.slotName))
 	}
-	p.logger.Info("using replication slot", zap.String("slot_name", s.slotName))
 
 	pluginArguments := []string{
 		"proto_version '2'",
@@ -177,14 +176,16 @@ func (p *PostgresDatasource) Read(ctx context.Context, cfg datasource.ReadConfig
 
 func (p *PostgresDatasource) Close(ctx context.Context) error {
 	for _, sub := range p.subscriptions {
-		err := pglogrepl.DropReplicationSlot(context.Background(), p.replicationConn, sub.slotName, pglogrepl.DropReplicationSlotOptions{})
-		if err != nil {
-			p.logger.Error("failed to drop replication slot", zap.String("slot_name", sub.slotName), zap.Error(err))
+		if p.cfg.ReplicationSlot == "" {
+			// drop only if the slot was temporary
+			err := pglogrepl.DropReplicationSlot(context.Background(), p.replicationConn, sub.slotName, pglogrepl.DropReplicationSlotOptions{})
+			if err != nil {
+				p.logger.Error("failed to drop replication slot", zap.String("slot_name", sub.slotName), zap.Error(err))
+			}
 		}
 		// TODO: add check before writing to the channel
 		close(sub.Ch)
 		close(sub.done)
-		p.logger.Info("dropped replication slot", zap.String("slot_name", sub.slotName))
 	}
 
 	err := p.conn.Close(ctx)
@@ -219,6 +220,7 @@ Loop:
 			}
 			p.logger.Debug("sent standby status message", zap.String("xlog_pos", clientXLogPos.String()))
 		default:
+			start := time.Now()
 			ctx, cancel := context.WithTimeout(context.Background(), standByTimeout)
 			rawMsg, err := p.replicationConn.ReceiveMessage(ctx)
 			cancel()
@@ -229,6 +231,7 @@ Loop:
 				p.logger.Error("ReceiveMessage failed", zap.Error(err))
 				continue
 			}
+			p.logger.Info("time to receive message", zap.Duration("duration", time.Since(start)))
 
 			if errMsg, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
 				p.logger.Error("received Postgres WAL error", zap.Any("error", errMsg))
@@ -277,6 +280,7 @@ Loop:
 				if xld.WALStart > clientXLogPos {
 					clientXLogPos = xld.WALStart
 				}
+				p.logger.Info("time to process message", zap.Duration("duration", time.Since(start)))
 			}
 		}
 	}

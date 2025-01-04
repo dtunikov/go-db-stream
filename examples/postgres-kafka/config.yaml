@@ -7,15 +7,19 @@ executor:
       postgres:
         url: "postgres://postgres:postgres@postgres:5432/postgres"
         # SQL command to create publication if it does not exist. See examples here: https://www.postgresql.org/docs/current/sql-createpublication.html
-        # ensure that postgres user has permission to create publication
+        # ensure that postgres user has permission to create publication. 
+        # In production it's better to create publications as a part of your database schema migration.
         createPublications: ['CREATE PUBLICATION example_publication FOR ALL TABLES;']
+        # replicationSlot: 'test_slot' # if not set, tmp slot will be created. Same as with publication, it's better to create slots as a part of your database schema migration.
 
     - id: kafka1
       kafka:
         brokers: ["kafka:9092"]
+        async: true
 
   connectors:
     - id: postgres1->kafka1
       from: postgres1
       to: kafka1
+      # default behaviour is to stream all tables that are part of the publication for "from" datasource
       allCollections: true
