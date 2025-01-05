@@ -202,8 +202,7 @@ func (p *PostgresDatasource) startPublishing(sub *subscription) error {
 	relationsV2 := map[uint32]*pglogrepl.RelationMessageV2{}
 	inStream := false
 
-	// TODO: make it configurable
-	standByTimeout := 10 * time.Second
+	standByTimeout := p.cfg.StandByTimeout
 	standbyMessageTicker := time.NewTicker(standByTimeout)
 	defer standbyMessageTicker.Stop()
 Loop:
@@ -425,9 +424,14 @@ func (p *PostgresDatasource) processData(walData []byte, relations map[uint32]*p
 		return nil
 	}
 
-	p.logger.Debug("sending message to the channel", zap.String("collection", msg.Collection),
-		zap.String("operation", string(msg.Op)), zap.String("message-id", string(msg.ID.String())))
-	sub.Ch <- msg
+	select {
+	case <-sub.done:
+		p.logger.Debug("subscription is closed, skipping the message")
+	case sub.Ch <- msg:
+		p.logger.Debug("sent message to the channel", zap.String("collection", msg.Collection),
+			zap.String("operation", string(msg.Op)), zap.String("message-id", string(msg.ID.String())))
+	}
+
 	return nil
 }
 

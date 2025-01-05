@@ -58,6 +58,11 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "standByTimeout": {
+                    "type": "string",
+                    "description": "Timeout for sending keepalive messages to the database server.",
+                    "default": "10s"
                   }
                 }
               },

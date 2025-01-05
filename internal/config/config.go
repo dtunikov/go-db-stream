@@ -12,10 +12,11 @@ import (
 )
 
 type PostgresDatasource struct {
-	Url                string   `yaml:"url"`
-	ReplicationSlot    string   `yaml:"replicationSlot"`
-	Publications       []string `yaml:"publications"`
-	CreatePublications []string `yaml:"createPublications"`
+	Url                string        `yaml:"url"`
+	ReplicationSlot    string        `yaml:"replicationSlot"`
+	Publications       []string      `yaml:"publications"`
+	CreatePublications []string      `yaml:"createPublications"`
+	StandByTimeout     time.Duration `yaml:"standByTimeout" envDefault:"10s"`
 }
 
 type KafkaDatasource struct {
@@ -129,12 +130,6 @@ type Config struct {
 func LoadConfig(configFilePath string) (*Config, error) {
 	cfg := Config{}
 
-	// evaluate environment variables and default values
-	err := env.Parse(&cfg)
-	if err != nil {
-		return nil, err
-	}
-
 	configFileBytes, err := os.ReadFile(configFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("could not read custom config file %s: %w", configFilePath, err)
@@ -143,6 +138,12 @@ func LoadConfig(configFilePath string) (*Config, error) {
 	configYamlData := os.ExpandEnv(string(configFileBytes))
 	if err := yaml.Unmarshal([]byte(configYamlData), &cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal router config: %w", err)
+	}
+
+	// evaluate environment variables and default values
+	err = env.Parse(&cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate the config against the JSON schema
