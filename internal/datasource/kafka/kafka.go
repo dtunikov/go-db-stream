@@ -128,8 +128,6 @@ func (k *KafkaDatasource) HealthCheck(ctx context.Context) error {
 }
 
 func (k *KafkaDatasource) Write(ctx context.Context, msg datasource.Message) error {
-	// TODO: exclude data from logs in production mode
-	k.logger.Debug("writing message", zap.String("collection", msg.Collection), zap.ByteString("data", msg.Data))
 	err := k.writer.WriteMessages(ctx, kafka.Message{
 		Headers: []kafka.Header{
 			{

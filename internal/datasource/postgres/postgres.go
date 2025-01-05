@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/rand"
 	"net/url"
 	"strconv"
@@ -220,7 +219,6 @@ Loop:
 			}
 			p.logger.Debug("sent standby status message", zap.String("xlog_pos", clientXLogPos.String()))
 		default:
-			start := time.Now()
 			ctx, cancel := context.WithTimeout(context.Background(), standByTimeout)
 			rawMsg, err := p.replicationConn.ReceiveMessage(ctx)
 			cancel()
@@ -231,7 +229,6 @@ Loop:
 				p.logger.Error("ReceiveMessage failed", zap.Error(err))
 				continue
 			}
-			p.logger.Info("time to receive message", zap.Duration("duration", time.Since(start)))
 
 			if errMsg, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
 				p.logger.Error("received Postgres WAL error", zap.Any("error", errMsg))
@@ -280,7 +277,6 @@ Loop:
 				if xld.WALStart > clientXLogPos {
 					clientXLogPos = xld.WALStart
 				}
-				p.logger.Info("time to process message", zap.Duration("duration", time.Since(start)))
 			}
 		}
 	}
@@ -345,47 +341,43 @@ func (p *PostgresDatasource) extractData(rel *pglogrepl.RelationMessageV2, dataC
 	return values, nil
 }
 
-func (p *PostgresDatasource) processInsert(logicalMsg *pglogrepl.InsertMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) error {
+func (p *PostgresDatasource) processInsert(logicalMsg *pglogrepl.InsertMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) (datasource.Message, error) {
 	rel, ok := relations[logicalMsg.RelationID]
 	if !ok {
-		return fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
+		return datasource.Message{}, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
 	}
 
 	values, err := p.extractData(rel, logicalMsg.Tuple.Columns, sub)
 	if err != nil {
-		return fmt.Errorf("failed to extract data: %w", err)
+		return datasource.Message{}, fmt.Errorf("failed to extract data: %w", err)
 	}
 
-	p.logger.Info("insert for xid", zap.Uint32("xid", logicalMsg.Xid), zap.String("namespace", rel.Namespace), zap.String("relation_name", rel.RelationName), zap.Any("values", values))
+	p.logger.Debug("insert for xid", zap.Uint32("xid", logicalMsg.Xid), zap.String("namespace", rel.Namespace), zap.String("relation_name", rel.RelationName), zap.Any("values", values))
 	data, _ := json.Marshal(values)
-	sub.Ch <- datasource.Message{Op: datasource.Insert, Data: data, Collection: rel.RelationName}
-
-	return nil
+	return datasource.Message{Op: datasource.Insert, Data: data, Collection: rel.RelationName}, nil
 }
 
-func (p *PostgresDatasource) processUpdate(logicalMsg *pglogrepl.UpdateMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) error {
-	p.logger.Info("update message", zap.Uint32("xid", logicalMsg.Xid),
+func (p *PostgresDatasource) processUpdate(logicalMsg *pglogrepl.UpdateMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) (datasource.Message, error) {
+	p.logger.Debug("update message", zap.Uint32("xid", logicalMsg.Xid),
 		zap.Any("old_tuple", logicalMsg.OldTuple), zap.Any("new_tuple", logicalMsg.NewTuple))
 	rel, ok := relations[logicalMsg.RelationID]
 	if !ok {
-		return fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
+		return datasource.Message{}, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
 	}
 
 	values, err := p.extractData(rel, logicalMsg.NewTuple.Columns, sub)
 	if err != nil {
-		return fmt.Errorf("failed to extract data: %w", err)
+		return datasource.Message{}, fmt.Errorf("failed to extract data: %w", err)
 	}
 
 	data, _ := json.Marshal(values)
-	sub.Ch <- datasource.Message{Op: datasource.Update, Data: data, Collection: rel.RelationName}
-
-	return nil
+	return datasource.Message{Op: datasource.Update, Data: data, Collection: rel.RelationName}, nil
 }
 
-func (p *PostgresDatasource) processDelete(logicalMsg *pglogrepl.DeleteMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) error {
+func (p *PostgresDatasource) processDelete(logicalMsg *pglogrepl.DeleteMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) (datasource.Message, error) {
 	rel, ok := relations[logicalMsg.RelationID]
 	if !ok {
-		return fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
+		return datasource.Message{}, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
 	}
 
 	p.logger.Debug("delete for xid", zap.Uint32("xid", logicalMsg.Xid),
@@ -395,13 +387,11 @@ func (p *PostgresDatasource) processDelete(logicalMsg *pglogrepl.DeleteMessageV2
 
 	values, err := p.extractData(rel, logicalMsg.OldTuple.Columns, sub)
 	if err != nil {
-		return fmt.Errorf("failed to extract data: %w", err)
+		return datasource.Message{}, fmt.Errorf("failed to extract data: %w", err)
 	}
 
 	data, _ := json.Marshal(values)
-	sub.Ch <- datasource.Message{Op: datasource.Delete, Data: data, Collection: rel.RelationName}
-
-	return nil
+	return datasource.Message{Op: datasource.Delete, Data: data, Collection: rel.RelationName}, nil
 }
 
 func (p *PostgresDatasource) processData(walData []byte, relations map[uint32]*pglogrepl.RelationMessageV2, inStream *bool, sub *subscription) error {
@@ -410,40 +400,34 @@ func (p *PostgresDatasource) processData(walData []byte, relations map[uint32]*p
 		return fmt.Errorf("failed to parse logical replication message: %w", err)
 	}
 
-	p.logger.Info("received logical replication message", zap.String("type", logicalMsg.Type().String()))
+	p.logger.Debug("received logical replication message", zap.String("type", logicalMsg.Type().String()))
+	msg := datasource.Message{
+		ID: uuid.New(),
+	}
 	switch logicalMsg := logicalMsg.(type) {
-	case *pglogrepl.RelationMessageV2:
-		relations[logicalMsg.RelationID] = logicalMsg
-	case *pglogrepl.BeginMessage:
-		// Indicates the beginning of a group of changes in a transaction. This is only sent for committed transactions. You won't get any events from rolled back transactions.
-	case *pglogrepl.CommitMessage:
 	case *pglogrepl.InsertMessageV2:
-		return p.processInsert(logicalMsg, relations, sub)
+		msg, err = p.processInsert(logicalMsg, relations, sub)
+		if err != nil {
+			return fmt.Errorf("failed to process insert: %w", err)
+		}
 	case *pglogrepl.UpdateMessageV2:
-		return p.processUpdate(logicalMsg, relations, sub)
+		msg, err = p.processUpdate(logicalMsg, relations, sub)
+		if err != nil {
+			return fmt.Errorf("failed to process update: %w", err)
+		}
 	case *pglogrepl.DeleteMessageV2:
-		return p.processDelete(logicalMsg, relations, sub)
-	case *pglogrepl.TruncateMessageV2:
-		p.logger.Info("truncate for xid", zap.Uint32("xid", logicalMsg.Xid))
-	case *pglogrepl.TypeMessageV2:
-	case *pglogrepl.OriginMessage:
-	case *pglogrepl.LogicalDecodingMessageV2:
-		p.logger.Info("logical decoding message", zap.String("prefix", logicalMsg.Prefix), zap.String("content", string(logicalMsg.Content)), zap.Uint32("xid", logicalMsg.Xid))
-	case *pglogrepl.StreamStartMessageV2:
-		*inStream = true
-		p.logger.Info("stream start message", zap.Uint32("xid", logicalMsg.Xid), zap.Bool("first_segment", logicalMsg.FirstSegment == 1))
-	case *pglogrepl.StreamStopMessageV2:
-		*inStream = false
-		p.logger.Info("stream stop message")
-	case *pglogrepl.StreamCommitMessageV2:
-		p.logger.Info("stream commit message", zap.Uint32("xid", logicalMsg.Xid))
-	case *pglogrepl.StreamAbortMessageV2:
-		p.logger.Info("stream abort message", zap.Uint32("xid", logicalMsg.Xid))
-		log.Printf("Stream abort message: xid %d", logicalMsg.Xid)
+		msg, err = p.processDelete(logicalMsg, relations, sub)
+		if err != nil {
+			return fmt.Errorf("failed to process delete: %w", err)
+		}
 	default:
-		log.Printf("Unknown message type in pgoutput stream: %T", logicalMsg)
+		p.logger.Debug("skipping message", zap.String("type", logicalMsg.Type().String()))
+		return nil
 	}
 
+	p.logger.Debug("sending message to the channel", zap.String("collection", msg.Collection),
+		zap.String("operation", string(msg.Op)), zap.String("message-id", string(msg.ID.String())))
+	sub.Ch <- msg
 	return nil
 }
 

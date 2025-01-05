@@ -69,6 +69,7 @@ const (
 )
 
 type Message struct {
+	ID         uuid.UUID
 	Op         Operation
 	Collection string
 	Data       []byte
