@@ -41,6 +41,7 @@ go-db-stream makes it easy to stream changes from your database to streaming pla
 |-------------|---------|-------------|
 | Kafka | ✅ Real-time streaming | Stream changes to Apache Kafka topics |
 | SQS | ⚙️ Real-time streaming | Send messages to Amazon SQS queues |
+| ClickHouse | ⚙️ Real-time streaming | Insert changes into ClickHouse tables for future analytics queries |
 | Redis | ⚙️ Real-time streaming | `XADD` to Redis Streams |
 | HTTP Webhook | ⚙️ Real-time streaming | Send changes to any HTTP endpoint |
 | GCP Pub/Sub | ⚙️ Real-time streaming | Publish messages to Google Cloud Pub/Sub topics |
