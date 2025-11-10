@@ -47,14 +47,14 @@ func serve() error {
 	}
 	defer logger.Sync()
 
-	executor, err := executor.NewExecutor(cfg.Executor, logger)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	executor, err := executor.NewExecutor(cfg.Executor, &wg, logger)
 	if err != nil {
 		return fmt.Errorf("could not create executor: %w", err)
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	err = executor.Run(&wg)
+	err = executor.Run()
 	if err != nil {
 		return fmt.Errorf("could not run executor: %w", err)
 	}
@@ -104,7 +104,7 @@ func serve() error {
 	}
 
 	// maybe use context with timeout
-	executor.Stop()
+	executor.Stop(ctx)
 	wg.Wait()
 	logger.Info("Server stopped")
 	return nil

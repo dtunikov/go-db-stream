@@ -8,6 +8,7 @@ import (
 	"github.com/dtunikov/go-db-stream/internal/config"
 	"github.com/dtunikov/go-db-stream/internal/datasource"
 	"github.com/dtunikov/go-db-stream/internal/services/datasources"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -67,7 +68,12 @@ func (c *Connector) Run(wg *sync.WaitGroup) error {
 	}
 
 	ctx := context.Background()
-	sub, err := c.from.Read(ctx, readConfig)
+	sub := &datasource.Subscription{
+		ID:         uuid.New(),
+		Ch:         make(chan datasource.Message),
+		ReadConfig: readConfig,
+	}
+	err := c.from.Read(ctx, sub)
 	if err != nil {
 		return fmt.Errorf("could not read from source datasource: %w", err)
 	}

@@ -127,16 +127,11 @@ func (p *PostgresDatasource) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *PostgresDatasource) Read(ctx context.Context, cfg datasource.ReadConfig) (*datasource.Subscription, error) {
-	subId := uuid.New()
+func (p *PostgresDatasource) Read(ctx context.Context, sub *datasource.Subscription) error {
 	s := &subscription{
-		Subscription: &datasource.Subscription{
-			ID:         subId,
-			Ch:         make(chan datasource.Message),
-			ReadConfig: cfg,
-		},
-		slotName: p.cfg.ReplicationSlot,
-		done:     make(chan struct{}),
+		Subscription: sub,
+		slotName:     p.cfg.ReplicationSlot,
+		done:         make(chan struct{}),
 	}
 
 	// if the slot name is not provided, create a temporary one
@@ -147,7 +142,7 @@ func (p *PostgresDatasource) Read(ctx context.Context, cfg datasource.ReadConfig
 			Temporary: true,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("create replication slot: %w", err)
+			return fmt.Errorf("create replication slot: %w", err)
 		}
 		p.logger.Info("created temporary replication slot", zap.String("slot_name", s.slotName))
 	}
@@ -162,7 +157,7 @@ func (p *PostgresDatasource) Read(ctx context.Context, cfg datasource.ReadConfig
 	err := pglogrepl.StartReplication(context.Background(), p.replicationConn, s.slotName, p.sysident.XLogPos,
 		pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments})
 	if err != nil {
-		return nil, fmt.Errorf("start replication: %w", err)
+		return fmt.Errorf("start replication: %w", err)
 	}
 	p.logger.Info("started replication", zap.String("slot_name", s.slotName))
 
@@ -170,7 +165,7 @@ func (p *PostgresDatasource) Read(ctx context.Context, cfg datasource.ReadConfig
 
 	p.subscriptions = append(p.subscriptions, s)
 
-	return s.Subscription, nil
+	return nil
 }
 
 func (p *PostgresDatasource) Close(ctx context.Context) error {
@@ -289,7 +284,6 @@ func (p *PostgresDatasource) extractData(rel *pglogrepl.RelationMessageV2, dataC
 	if !sub.ReadConfig.AllCollections {
 		// check if the collection is in the mapping
 		for _, m := range sub.ReadConfig.Mapping {
-			m := m
 			if m.Collection == rel.RelationName {
 				matchedMapping = &m
 				break
@@ -324,7 +318,6 @@ func (p *PostgresDatasource) extractData(rel *pglogrepl.RelationMessageV2, dataC
 			// check if the field is in the mapping
 			var matchedFieldMapping *datasource.ReadConfigFieldMapping
 			for _, m := range matchedMapping.Fields {
-				m := m
 				if m.Field == k {
 					matchedFieldMapping = &m
 				}
@@ -419,6 +412,12 @@ func (p *PostgresDatasource) processData(walData []byte, relations map[uint32]*p
 		if err != nil {
 			return fmt.Errorf("failed to process delete: %w", err)
 		}
+	case *pglogrepl.RelationMessageV2:
+		relations[logicalMsg.RelationID] = logicalMsg
+		p.logger.Debug("stored relation message", zap.Uint32("relation_id", logicalMsg.RelationID),
+			zap.String("namespace", logicalMsg.Namespace), zap.String("relation_name", logicalMsg.RelationName))
+		// return early as we don't need to send anything to the subscription channel
+		return nil
 	default:
 		p.logger.Debug("skipping message", zap.String("type", logicalMsg.Type().String()))
 		return nil
