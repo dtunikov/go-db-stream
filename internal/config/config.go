@@ -11,15 +11,6 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// type MySqlDatasource struct {
-// 	Flavor   string `yaml:"flavor" envDefault:"mysql"`
-// 	Host     string `yaml:"host"`
-// 	Port     int    `yaml:"port" envDefault:"3306"`
-// 	User     string `yaml:"user"`
-// 	Password string `yaml:"password"`
-// 	DB       string `yaml:"db"`
-// }
-
 type PostgresDatasource struct {
 	Url                string        `yaml:"url"`
 	ReplicationSlot    string        `yaml:"replicationSlot"`
@@ -116,8 +107,7 @@ type Log struct {
 }
 
 type Datasource struct {
-	Id string `yaml:"id"`
-	// MySQL    *MySqlDatasource    `yaml:"mysql"`
+	Id       string              `yaml:"id"`
 	Postgres *PostgresDatasource `yaml:"postgres"`
 	Kafka    *KafkaDatasource    `yaml:"kafka"`
 }

@@ -66,36 +66,6 @@
                   }
                 }
               },
-              "mysql": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["host"],
-                "properties": {
-                  "host": {
-                    "type": "string",
-                    "description": "MySQL host."
-                  },
-                  "port": {
-                    "type": "integer",
-                    "description": "MySQL port.",
-                    "default": 3306
-                  },
-                  "user": {
-                    "type": "string",
-                    "description": "MySQL user."
-                  },
-                  "password": {
-                    "type": "string",
-                    "description": "MySQL password."
-                  },
-                  "flavor": {
-                    "type": "string",
-                    "description": "MySQL flavor.",
-                    "enum": ["mysql", "mariadb"],
-                    "default": "mysql"
-                  }
-                }
-              },
               "kafka": {
                 "type": "object",
                 "additionalProperties": false,
