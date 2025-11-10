@@ -53,8 +53,6 @@ func NewConnector(cfg config.Connector, dsService *datasources.Service, logger *
 }
 
 func (c *Connector) Run(wg *sync.WaitGroup) error {
-	defer wg.Done()
-
 	readConfig := datasource.ReadConfig{
 		AllCollections: c.cfg.AllCollections,
 		Mapping:        make([]datasource.ReadConfigMapping, len(c.cfg.Mapping)),
@@ -78,26 +76,30 @@ func (c *Connector) Run(wg *sync.WaitGroup) error {
 		return fmt.Errorf("could not read from source datasource: %w", err)
 	}
 
-	c.logger.Info("starting connector")
-Outer:
-	for {
-		select {
-		case <-c.done:
-			break Outer
-		case msg := <-sub.Ch:
-			// TODO: we could actually filter the message here instead of filtering it inside readable datasource code, BUT that would mean that we would have to read the message and unmarshal it to check if it should be filtered
-			// sometimes it is better to filter the message as soon as possible (so on)
-			// TODO: take timeout from config
-			// ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := c.to.Write(context.Background(), msg)
-			// cancel()
-			if err != nil {
-				c.logger.Error("could not write message", zap.Error(err))
+	go func() {
+		defer wg.Done()
+		c.logger.Info("starting connector")
+	Outer:
+		for {
+			select {
+			case <-c.done:
+				break Outer
+			case msg := <-sub.Ch:
+				// TODO: we could actually filter the message here instead of filtering it inside readable datasource code, BUT that would mean that we would have to read the message and unmarshal it to check if it should be filtered
+				// sometimes it is better to filter the message as soon as possible (so on)
+				// TODO: take timeout from config
+				// ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				err := c.to.Write(context.Background(), msg)
+				// cancel()
+				if err != nil {
+					c.logger.Error("could not write message", zap.Error(err))
+				}
 			}
 		}
-	}
 
-	c.logger.Info("connector stopped")
+		c.logger.Info("connector stopped")
+	}()
+
 	return nil
 }
 

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/dtunikov/go-db-stream/internal/config"
@@ -45,7 +46,10 @@ func NewExecutor(cfg config.Executor, wg *sync.WaitGroup, logger *zap.Logger) (*
 func (e *Executor) Run() error {
 	e.connectorsWg.Add(len(e.connectors))
 	for _, c := range e.connectors {
-		go c.Run(&e.connectorsWg)
+		err := c.Run(&e.connectorsWg)
+		if err != nil {
+			return fmt.Errorf("failed to run connector %q: %w", c.Id, err)
+		}
 	}
 
 	return nil

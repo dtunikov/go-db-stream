@@ -2,11 +2,10 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type PostgresDatasource struct {
@@ -35,7 +35,8 @@ type PostgresDatasource struct {
 type subscription struct {
 	*datasource.Subscription
 	slotName string
-	done     chan struct{}
+	cancel   context.CancelFunc
+	eg       *errgroup.Group
 }
 
 func NewPostgresDatasource(ctx context.Context, cfg config.PostgresDatasource, logger *zap.Logger) (*PostgresDatasource, error) {
@@ -128,15 +129,26 @@ func (p *PostgresDatasource) HealthCheck(ctx context.Context) error {
 }
 
 func (p *PostgresDatasource) Read(ctx context.Context, sub *datasource.Subscription) error {
+	// Create a cancellable context for the subscription goroutine
+	subCtx, cancel := context.WithCancel(context.Background())
+	eg, egCtx := errgroup.WithContext(subCtx)
+
 	s := &subscription{
 		Subscription: sub,
 		slotName:     p.cfg.ReplicationSlot,
-		done:         make(chan struct{}),
+		cancel:       cancel,
+		eg:           eg,
 	}
 
 	// if the slot name is not provided, create a temporary one
 	if p.cfg.ReplicationSlot == "" {
-		s.slotName = "replica_" + strconv.Itoa(rand.Int())
+		// Generate a valid slot name: lowercase letters, numbers, underscores only
+		// Use crypto/rand for better randomness
+		randomBytes := make([]byte, 8)
+		if _, err := rand.Read(randomBytes); err != nil {
+			return fmt.Errorf("generate random slot name: %w", err)
+		}
+		s.slotName = fmt.Sprintf("replica_%x", randomBytes)
 		_, err := pglogrepl.CreateReplicationSlot(ctx, p.replicationConn, s.slotName, "pgoutput", pglogrepl.CreateReplicationSlotOptions{
 			// meaning that the slot will be dropped when the connection is closed
 			Temporary: true,
@@ -154,14 +166,17 @@ func (p *PostgresDatasource) Read(ctx context.Context, sub *datasource.Subscript
 		// TODO: figure out in which cases this could be useful
 		// "streaming 'true'",
 	}
-	err := pglogrepl.StartReplication(context.Background(), p.replicationConn, s.slotName, p.sysident.XLogPos,
+	err := pglogrepl.StartReplication(ctx, p.replicationConn, s.slotName, p.sysident.XLogPos,
 		pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments})
 	if err != nil {
+		cancel()
 		return fmt.Errorf("start replication: %w", err)
 	}
 	p.logger.Info("started replication", zap.String("slot_name", s.slotName))
 
-	go p.startPublishing(s)
+	eg.Go(func() error {
+		return p.startPublishing(egCtx, s)
+	})
 
 	p.subscriptions = append(p.subscriptions, s)
 
@@ -170,6 +185,14 @@ func (p *PostgresDatasource) Read(ctx context.Context, sub *datasource.Subscript
 
 func (p *PostgresDatasource) Close(ctx context.Context) error {
 	for _, sub := range p.subscriptions {
+		// Signal the goroutine to stop
+		sub.cancel()
+
+		// Wait for the goroutine to complete
+		if err := sub.eg.Wait(); err != nil {
+			p.logger.Error("startPublishing returned error", zap.String("slot_name", sub.slotName), zap.Error(err))
+		}
+
 		if p.cfg.ReplicationSlot == "" {
 			// drop only if the slot was temporary
 			err := pglogrepl.DropReplicationSlot(context.Background(), p.replicationConn, sub.slotName, pglogrepl.DropReplicationSlotOptions{})
@@ -177,9 +200,9 @@ func (p *PostgresDatasource) Close(ctx context.Context) error {
 				p.logger.Error("failed to drop replication slot", zap.String("slot_name", sub.slotName), zap.Error(err))
 			}
 		}
-		// TODO: add check before writing to the channel
+
+		// Close the channel after goroutine has exited
 		close(sub.Ch)
-		close(sub.done)
 	}
 
 	err := p.conn.Close(ctx)
@@ -187,12 +210,17 @@ func (p *PostgresDatasource) Close(ctx context.Context) error {
 		return fmt.Errorf("failed to close pg connection: %w", err)
 	}
 
+	err = p.replicationConn.Close(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to close replication connection: %w", err)
+	}
+
 	p.logger.Info("closed postgres datasource")
 	return nil
 }
 
-func (p *PostgresDatasource) startPublishing(sub *subscription) error {
-	p.logger.Info("start publishing", zap.String("slot_name", sub.slotName))
+func (p *PostgresDatasource) startPublishing(ctx context.Context, sub *subscription) error {
+	p.logger.Info("start reading from replication slot", zap.String("slot_name", sub.slotName))
 	clientXLogPos := p.sysident.XLogPos
 	relationsV2 := map[uint32]*pglogrepl.RelationMessageV2{}
 	inStream := false
@@ -203,7 +231,8 @@ func (p *PostgresDatasource) startPublishing(sub *subscription) error {
 Loop:
 	for {
 		select {
-		case <-sub.done:
+		case <-ctx.Done():
+			p.logger.Info("context cancelled, stopping publishing", zap.String("slot_name", sub.slotName))
 			break Loop
 		case <-standbyMessageTicker.C:
 			err := pglogrepl.SendStandbyStatusUpdate(context.Background(), p.replicationConn, pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
@@ -268,6 +297,8 @@ Loop:
 					continue
 				}
 
+				// Only update position after successfully processing
+				// WALStart is the position of this record - we've now processed it
 				if xld.WALStart > clientXLogPos {
 					clientXLogPos = xld.WALStart
 				}
@@ -345,7 +376,10 @@ func (p *PostgresDatasource) processInsert(logicalMsg *pglogrepl.InsertMessageV2
 	}
 
 	p.logger.Debug("insert for xid", zap.Uint32("xid", logicalMsg.Xid), zap.String("namespace", rel.Namespace), zap.String("relation_name", rel.RelationName), zap.Any("values", values))
-	data, _ := json.Marshal(values)
+	data, err := json.Marshal(values)
+	if err != nil {
+		return datasource.Message{}, fmt.Errorf("failed to marshal data: %w", err)
+	}
 	return datasource.Message{Op: datasource.Insert, Data: data, Collection: rel.RelationName}, nil
 }
 
@@ -362,7 +396,11 @@ func (p *PostgresDatasource) processUpdate(logicalMsg *pglogrepl.UpdateMessageV2
 		return datasource.Message{}, fmt.Errorf("failed to extract data: %w", err)
 	}
 
-	data, _ := json.Marshal(values)
+	data, err := json.Marshal(values)
+	if err != nil {
+		return datasource.Message{}, fmt.Errorf("failed to marshal data: %w", err)
+	}
+
 	return datasource.Message{Op: datasource.Update, Data: data, Collection: rel.RelationName}, nil
 }
 
@@ -382,7 +420,11 @@ func (p *PostgresDatasource) processDelete(logicalMsg *pglogrepl.DeleteMessageV2
 		return datasource.Message{}, fmt.Errorf("failed to extract data: %w", err)
 	}
 
-	data, _ := json.Marshal(values)
+	data, err := json.Marshal(values)
+	if err != nil {
+		return datasource.Message{}, fmt.Errorf("failed to marshal data: %w", err)
+	}
+
 	return datasource.Message{Op: datasource.Delete, Data: data, Collection: rel.RelationName}, nil
 }
 
@@ -423,13 +465,11 @@ func (p *PostgresDatasource) processData(walData []byte, relations map[uint32]*p
 		return nil
 	}
 
-	select {
-	case <-sub.done:
-		p.logger.Debug("subscription is closed, skipping the message")
-	case sub.Ch <- msg:
-		p.logger.Debug("sent message to the channel", zap.String("collection", msg.Collection),
-			zap.String("operation", string(msg.Op)), zap.String("message-id", string(msg.ID.String())))
-	}
+	// Blocking send to ensure no messages are dropped
+	// This provides backpressure to PostgreSQL if consumer is slow
+	sub.Ch <- msg
+	p.logger.Debug("sent message to the channel", zap.String("collection", msg.Collection),
+		zap.String("operation", string(msg.Op)), zap.String("message-id", string(msg.ID.String())))
 
 	return nil
 }

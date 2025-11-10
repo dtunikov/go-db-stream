@@ -11,6 +11,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1
 	github.com/segmentio/kafka-go v0.4.47
 	go.uber.org/zap v1.27.0
+	golang.org/x/sync v0.10.0
 )
 
 require (
