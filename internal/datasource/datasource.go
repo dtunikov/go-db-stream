@@ -9,6 +9,7 @@ import (
 type Datasource interface {
 	// Check if the datasource is healthy
 	HealthCheck(ctx context.Context) error
+	Close(ctx context.Context) error
 }
 
 type ReadConfigMapping struct {
@@ -52,7 +53,7 @@ func NewReadConfig() ReadConfig {
 type ReadableDatasource interface {
 	Datasource
 	// Subscribe to a collection changes
-	Read(ctx context.Context, cfg ReadConfig) (*Subscription, error)
+	Read(ctx context.Context, sub *Subscription) error
 }
 
 type WritableDatasource interface {

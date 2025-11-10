@@ -1,7 +1,7 @@
 package executor
 
 import (
-	"fmt"
+	"context"
 	"sync"
 
 	"github.com/dtunikov/go-db-stream/internal/config"
@@ -11,24 +11,28 @@ import (
 )
 
 type Executor struct {
-	cfg          config.Executor
-	connectors   []connector.Connector
-	connectorsWg sync.WaitGroup
+	cfg            config.Executor
+	datasourcesSvc *datasources.Service
+	connectors     []connector.Connector
+	connectorsWg   sync.WaitGroup
+	externalWg     *sync.WaitGroup
 }
 
-func NewExecutor(cfg config.Executor, logger *zap.Logger) (*Executor, error) {
+func NewExecutor(cfg config.Executor, wg *sync.WaitGroup, logger *zap.Logger) (*Executor, error) {
+	var err error
 	executor := &Executor{
-		cfg: cfg,
+		cfg:        cfg,
+		externalWg: wg,
 	}
 	// init datasources service
-	datasourcesSvc, err := datasources.NewService(cfg.Datasources, logger)
+	executor.datasourcesSvc, err = datasources.NewService(cfg.Datasources, logger)
 	if err != nil {
 		return nil, err
 	}
 
 	// init connectors
 	for _, c := range cfg.Connectors {
-		connector, err := connector.NewConnector(c, datasourcesSvc, logger)
+		connector, err := connector.NewConnector(c, executor.datasourcesSvc, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -38,24 +42,21 @@ func NewExecutor(cfg config.Executor, logger *zap.Logger) (*Executor, error) {
 	return executor, nil
 }
 
-func (e *Executor) Run(wg *sync.WaitGroup) error {
-	defer wg.Done()
-
+func (e *Executor) Run() error {
 	e.connectorsWg.Add(len(e.connectors))
 	for _, c := range e.connectors {
-		err := c.Run(&e.connectorsWg)
-		if err != nil {
-			return fmt.Errorf("could not run connector %s: %w", c.Id, err)
-		}
+		go c.Run(&e.connectorsWg)
 	}
 
 	return nil
 }
 
-func (e *Executor) Stop() {
+func (e *Executor) Stop(ctx context.Context) {
+	e.datasourcesSvc.Close(ctx)
 	for _, c := range e.connectors {
 		c.Stop()
 	}
 	// wait for all connectors to stop
 	e.connectorsWg.Wait()
+	e.externalWg.Done()
 }

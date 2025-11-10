@@ -13,6 +13,7 @@ import (
 
 type Service struct {
 	datasources map[string]datasource.Datasource
+	logger      *zap.Logger
 }
 
 func NewService(datasourcesConfig []config.Datasource, logger *zap.Logger) (*Service, error) {
@@ -40,6 +41,7 @@ func NewService(datasourcesConfig []config.Datasource, logger *zap.Logger) (*Ser
 
 	return &Service{
 		datasources: datasources,
+		logger:      logger,
 	}, nil
 }
 
@@ -49,4 +51,13 @@ func (s *Service) DatasourceById(id string) (datasource.Datasource, error) {
 		return nil, fmt.Errorf("datasource not found")
 	}
 	return ds, nil
+}
+
+func (s *Service) Close(ctx context.Context) {
+	for _, ds := range s.datasources {
+		err := ds.Close(ctx)
+		if err != nil {
+			s.logger.Error("failed to close datasource", zap.Error(err))
+		}
+	}
 }

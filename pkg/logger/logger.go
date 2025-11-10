@@ -21,9 +21,6 @@ func NewLogger(level string) (*zap.Logger, error) {
 		zapcore.NewCore(zapcore.NewJSONEncoder(logEncoder),
 			os.Stdout,
 			logLevel))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create logger: %w", err)
-	}
 
 	return logger, nil
 }

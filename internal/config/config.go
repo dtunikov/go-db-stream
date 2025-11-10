@@ -103,7 +103,7 @@ type Connector struct {
 }
 
 type Log struct {
-	Level string `yaml:"level" envDefault:"info" env:"LOG_LEVEL"`
+	Level string `yaml:"level" env:"LOG_LEVEL" envDefault:"info"`
 }
 
 type Datasource struct {
@@ -118,7 +118,7 @@ type Executor struct {
 }
 
 type Server struct {
-	Port int `yaml:"port"`
+	Port int `yaml:"port" env:"SERVER_PORT" envDefault:"8080"`
 }
 
 type Config struct {
@@ -130,6 +130,11 @@ type Config struct {
 func LoadConfig(configFilePath string) (*Config, error) {
 	cfg := Config{}
 
+	err := env.Parse(&cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	configFileBytes, err := os.ReadFile(configFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("could not read custom config file %s: %w", configFilePath, err)
@@ -140,10 +145,17 @@ func LoadConfig(configFilePath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal router config: %w", err)
 	}
 
-	// evaluate environment variables and default values
-	err = env.Parse(&cfg)
-	if err != nil {
-		return nil, err
+	for idx := range cfg.Executor.Datasources {
+		err = env.Parse(&cfg.Executor.Datasources[idx])
+		if err != nil {
+			return nil, fmt.Errorf("invalid datasource config: %w", err)
+		}
+	}
+	for idx := range cfg.Executor.Connectors {
+		err = env.Parse(&cfg.Executor.Connectors[idx])
+		if err != nil {
+			return nil, fmt.Errorf("invalid connector config: %w", err)
+		}
 	}
 
 	// Validate the config against the JSON schema

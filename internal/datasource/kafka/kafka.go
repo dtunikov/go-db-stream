@@ -145,3 +145,11 @@ func (k *KafkaDatasource) Write(ctx context.Context, msg datasource.Message) err
 	k.logger.Debug("message written successfully")
 	return nil
 }
+
+func (k *KafkaDatasource) Close(ctx context.Context) error {
+	err := k.writer.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close kafka writer: %w", err)
+	}
+	return nil
+}
