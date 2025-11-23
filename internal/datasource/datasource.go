@@ -52,13 +52,17 @@ func NewReadConfig() ReadConfig {
 
 type ReadableDatasource interface {
 	Datasource
-	// Subscribe to a collection changes
-	Read(ctx context.Context, sub *Subscription) error
+	// Next returns the next message from the datasource, blocking until one is available
+	Next(ctx context.Context) (*MessageWithPosition, error)
+	// Commit acknowledges that messages up to the given position have been successfully processed
+	Commit(ctx context.Context, position any) error
 }
 
 type WritableDatasource interface {
 	Datasource
 	Write(ctx context.Context, msg Message) error
+	// WriteBatch writes multiple messages in a single operation for better performance
+	WriteBatch(ctx context.Context, msgs []Message) error
 }
 
 type Operation string
@@ -76,8 +80,8 @@ type Message struct {
 	Data       []byte
 }
 
-type Subscription struct {
-	ID         uuid.UUID
-	Ch         chan Message
-	ReadConfig ReadConfig
+type MessageWithPosition struct {
+	Message
+	// Position is datasource-specific (e.g., LSN for Postgres, offset for Kafka)
+	Position any
 }

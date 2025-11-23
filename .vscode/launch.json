@@ -18,7 +18,7 @@
       "mode": "auto",
       "program": "${workspaceFolder}/main.go",
       "args": [
-        "-config", "local.yaml",
+        "-config", "config.yaml",
       ]
     }
   ]

@@ -7,37 +7,47 @@ import (
 
 	"github.com/dtunikov/go-db-stream/internal/config"
 	"github.com/dtunikov/go-db-stream/internal/connector"
-	"github.com/dtunikov/go-db-stream/internal/services/datasources"
 	"go.uber.org/zap"
 )
 
 type Executor struct {
-	cfg            config.Executor
-	datasourcesSvc *datasources.Service
-	connectors     []connector.Connector
-	connectorsWg   sync.WaitGroup
-	externalWg     *sync.WaitGroup
+	cfg          config.Executor
+	connectors   []*connector.Connector
+	connectorsWg sync.WaitGroup
+	externalWg   *sync.WaitGroup
+	logger       *zap.Logger
 }
 
 func NewExecutor(cfg config.Executor, wg *sync.WaitGroup, logger *zap.Logger) (*Executor, error) {
-	var err error
 	executor := &Executor{
 		cfg:        cfg,
 		externalWg: wg,
-	}
-	// init datasources service
-	executor.datasourcesSvc, err = datasources.NewService(cfg.Datasources, logger)
-	if err != nil {
-		return nil, err
+		logger:     logger,
 	}
 
-	// init connectors
-	for _, c := range cfg.Connectors {
-		connector, err := connector.NewConnector(c, executor.datasourcesSvc, logger)
-		if err != nil {
-			return nil, err
+	// Create a map of datasources by ID for lookup
+	datasourceMap := make(map[string]config.Datasource)
+	for _, ds := range cfg.Datasources {
+		datasourceMap[ds.Id] = ds
+	}
+
+	// Init connectors - each connector creates its own datasource instances
+	for _, connCfg := range cfg.Connectors {
+		fromDs, ok := datasourceMap[connCfg.From]
+		if !ok {
+			return nil, fmt.Errorf("source datasource %q not found for connector %q", connCfg.From, connCfg.Id)
 		}
-		executor.connectors = append(executor.connectors, *connector)
+
+		toDs, ok := datasourceMap[connCfg.To]
+		if !ok {
+			return nil, fmt.Errorf("destination datasource %q not found for connector %q", connCfg.To, connCfg.Id)
+		}
+
+		conn, err := connector.NewConnector(context.Background(), fromDs, toDs, connCfg, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create connector %q: %w", connCfg.Id, err)
+		}
+		executor.connectors = append(executor.connectors, conn)
 	}
 
 	return executor, nil
@@ -56,11 +66,23 @@ func (e *Executor) Run() error {
 }
 
 func (e *Executor) Stop(ctx context.Context) {
-	e.datasourcesSvc.Close(ctx)
+	e.logger.Info("stopping executor")
+
+	// Stop all connectors
 	for _, c := range e.connectors {
 		c.Stop()
 	}
-	// wait for all connectors to stop
+
+	// Wait for all connectors to stop
 	e.connectorsWg.Wait()
+
+	// Close all connector datasources
+	for _, c := range e.connectors {
+		if err := c.Close(ctx); err != nil {
+			e.logger.Error("failed to close connector", zap.String("connector_id", c.Id), zap.Error(err))
+		}
+	}
+
+	e.logger.Info("executor stopped")
 	e.externalWg.Done()
 }

@@ -146,10 +146,41 @@ func (k *KafkaDatasource) Write(ctx context.Context, msg datasource.Message) err
 	return nil
 }
 
+func (k *KafkaDatasource) WriteBatch(ctx context.Context, msgs []datasource.Message) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	// Convert datasource messages to kafka messages
+	kafkaMsgs := make([]kafka.Message, len(msgs))
+	for i, msg := range msgs {
+		kafkaMsgs[i] = kafka.Message{
+			Headers: []kafka.Header{
+				{
+					Key:   "operation",
+					Value: []byte(msg.Op),
+				},
+			},
+			Value: msg.Data,
+			Topic: msg.Collection,
+		}
+	}
+
+	// Write all messages in a single call
+	err := k.writer.WriteMessages(ctx, kafkaMsgs...)
+	if err != nil {
+		return fmt.Errorf("failed to write batch: %w", err)
+	}
+
+	k.logger.Debug("batch written successfully", zap.Int("count", len(msgs)))
+	return nil
+}
+
 func (k *KafkaDatasource) Close(ctx context.Context) error {
 	err := k.writer.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close kafka writer: %w", err)
 	}
+	k.logger.Info("closed kafka datasource")
 	return nil
 }

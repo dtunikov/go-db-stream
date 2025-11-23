@@ -19,27 +19,27 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type PostgresDatasource struct {
 	conn            *pgx.Conn
 	replicationConn *pgconn.PgConn
-	subscriptions   []*subscription
 	logger          *zap.Logger
 	sysident        pglogrepl.IdentifySystemResult
 	publications    []string
 	cfg             config.PostgresDatasource
+
+	// Pull-based reading state
+	slotName              string
+	clientXLogPos         pglogrepl.LSN
+	lastConfirmedPosition pglogrepl.LSN
+	relationsV2           map[uint32]*pglogrepl.RelationMessageV2
+	inStream              bool
+	readConfig            datasource.ReadConfig
+	replicationStarted    bool
 }
 
-type subscription struct {
-	*datasource.Subscription
-	slotName string
-	cancel   context.CancelFunc
-	eg       *errgroup.Group
-}
-
-func NewPostgresDatasource(ctx context.Context, cfg config.PostgresDatasource, logger *zap.Logger) (*PostgresDatasource, error) {
+func NewPostgresDatasource(ctx context.Context, cfg config.PostgresDatasource, logger *zap.Logger, readConfig *datasource.ReadConfig) (*PostgresDatasource, error) {
 	replicationUrl, err := url.Parse(cfg.Url)
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres url: %w", err)
@@ -103,14 +103,24 @@ func NewPostgresDatasource(ctx context.Context, cfg config.PostgresDatasource, l
 		zap.Strings("publications", publications),
 	)
 
+	// Default to reading all collections if no config provided
+	finalReadConfig := datasource.NewReadConfig()
+	if readConfig != nil {
+		finalReadConfig = *readConfig
+	}
+
 	return &PostgresDatasource{
-		pgConnection,
-		replicationConn,
-		make([]*subscription, 0),
-		logger.With(zap.String("datasource-type", "postgres")),
-		sysident,
-		publications,
-		cfg,
+		conn:                  pgConnection,
+		replicationConn:       replicationConn,
+		logger:                logger.With(zap.String("datasource-type", "postgres")),
+		sysident:              sysident,
+		publications:          publications,
+		cfg:                   cfg,
+		relationsV2:           make(map[uint32]*pglogrepl.RelationMessageV2),
+		replicationStarted:    false,
+		clientXLogPos:         0,
+		lastConfirmedPosition: 0,
+		readConfig:            finalReadConfig,
 	}, nil
 }
 
@@ -128,81 +138,15 @@ func (p *PostgresDatasource) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (p *PostgresDatasource) Read(ctx context.Context, sub *datasource.Subscription) error {
-	// Create a cancellable context for the subscription goroutine
-	subCtx, cancel := context.WithCancel(context.Background())
-	eg, egCtx := errgroup.WithContext(subCtx)
-
-	s := &subscription{
-		Subscription: sub,
-		slotName:     p.cfg.ReplicationSlot,
-		cancel:       cancel,
-		eg:           eg,
-	}
-
-	// if the slot name is not provided, create a temporary one
-	if p.cfg.ReplicationSlot == "" {
-		// Generate a valid slot name: lowercase letters, numbers, underscores only
-		// Use crypto/rand for better randomness
-		randomBytes := make([]byte, 8)
-		if _, err := rand.Read(randomBytes); err != nil {
-			return fmt.Errorf("generate random slot name: %w", err)
-		}
-		s.slotName = fmt.Sprintf("replica_%x", randomBytes)
-		_, err := pglogrepl.CreateReplicationSlot(ctx, p.replicationConn, s.slotName, "pgoutput", pglogrepl.CreateReplicationSlotOptions{
-			// meaning that the slot will be dropped when the connection is closed
-			Temporary: true,
+func (p *PostgresDatasource) Close(ctx context.Context) error {
+	// Drop temporary slot if using Next() method
+	if p.replicationStarted && p.cfg.ReplicationSlot == "" && p.slotName != "" {
+		err := pglogrepl.DropReplicationSlot(context.Background(), p.replicationConn, p.slotName, pglogrepl.DropReplicationSlotOptions{
+			Wait: true,
 		})
 		if err != nil {
-			return fmt.Errorf("create replication slot: %w", err)
+			p.logger.Error("failed to drop replication slot", zap.String("slot_name", p.slotName), zap.Error(err))
 		}
-		p.logger.Info("created temporary replication slot", zap.String("slot_name", s.slotName))
-	}
-
-	pluginArguments := []string{
-		"proto_version '2'",
-		fmt.Sprintf("publication_names '%s'", strings.Join(p.publications, ",")),
-		"messages 'true'",
-		// TODO: figure out in which cases this could be useful
-		// "streaming 'true'",
-	}
-	err := pglogrepl.StartReplication(ctx, p.replicationConn, s.slotName, p.sysident.XLogPos,
-		pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments})
-	if err != nil {
-		cancel()
-		return fmt.Errorf("start replication: %w", err)
-	}
-	p.logger.Info("started replication", zap.String("slot_name", s.slotName))
-
-	eg.Go(func() error {
-		return p.startPublishing(egCtx, s)
-	})
-
-	p.subscriptions = append(p.subscriptions, s)
-
-	return nil
-}
-
-func (p *PostgresDatasource) Close(ctx context.Context) error {
-	for _, sub := range p.subscriptions {
-		// Signal the goroutine to stop
-		sub.cancel()
-
-		// Wait for the goroutine to complete
-		if err := sub.eg.Wait(); err != nil {
-			p.logger.Error("startPublishing returned error", zap.String("slot_name", sub.slotName), zap.Error(err))
-		}
-
-		if p.cfg.ReplicationSlot == "" {
-			// drop only if the slot was temporary
-			err := pglogrepl.DropReplicationSlot(context.Background(), p.replicationConn, sub.slotName, pglogrepl.DropReplicationSlotOptions{})
-			if err != nil {
-				p.logger.Error("failed to drop replication slot", zap.String("slot_name", sub.slotName), zap.Error(err))
-			}
-		}
-
-		// Close the channel after goroutine has exited
-		close(sub.Ch)
 	}
 
 	err := p.conn.Close(ctx)
@@ -219,110 +163,322 @@ func (p *PostgresDatasource) Close(ctx context.Context) error {
 	return nil
 }
 
-func (p *PostgresDatasource) startPublishing(ctx context.Context, sub *subscription) error {
-	p.logger.Info("start reading from replication slot", zap.String("slot_name", sub.slotName))
-	clientXLogPos := p.sysident.XLogPos
-	relationsV2 := map[uint32]*pglogrepl.RelationMessageV2{}
-	inStream := false
+var typeMap = pgtype.NewMap()
 
-	standByTimeout := p.cfg.StandByTimeout
-	standbyMessageTicker := time.NewTicker(standByTimeout)
-	defer standbyMessageTicker.Stop()
-Loop:
-	for {
-		select {
-		case <-ctx.Done():
-			p.logger.Info("context cancelled, stopping publishing", zap.String("slot_name", sub.slotName))
-			break Loop
-		case <-standbyMessageTicker.C:
-			err := pglogrepl.SendStandbyStatusUpdate(context.Background(), p.replicationConn, pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
-			if err != nil {
-				p.logger.Error("SendStandbyStatusUpdate failed", zap.Error(err))
-				continue
-			}
-			p.logger.Debug("sent standby status message", zap.String("xlog_pos", clientXLogPos.String()))
-		default:
-			ctx, cancel := context.WithTimeout(context.Background(), standByTimeout)
-			rawMsg, err := p.replicationConn.ReceiveMessage(ctx)
-			cancel()
-			if err != nil {
-				if pgconn.Timeout(err) {
-					continue
-				}
-				p.logger.Error("ReceiveMessage failed", zap.Error(err))
-				continue
-			}
+func decodeTextColumnData(data []byte, dataType uint32) (interface{}, error) {
+	if dt, ok := typeMap.TypeForOID(dataType); ok {
+		return dt.Codec.DecodeValue(typeMap, dataType, pgtype.TextFormatCode, data)
+	}
+	return string(data), nil
+}
 
-			if errMsg, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
-				p.logger.Error("received Postgres WAL error", zap.Any("error", errMsg))
-				continue
-			}
-
-			msg, ok := rawMsg.(*pgproto3.CopyData)
-			if !ok {
-				p.logger.Error("unexpected message type", zap.Any("msg", rawMsg))
-				continue
-			}
-
-			switch msg.Data[0] {
-			case pglogrepl.PrimaryKeepaliveMessageByteID:
-				pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
-				if err != nil {
-					p.logger.Error("failed to parse primary keepalive message", zap.Error(err))
-					continue
-				}
-				p.logger.Debug("received primary keepalive message", zap.String("server_wal_end", pkm.ServerWALEnd.String()), zap.String("server_time", pkm.ServerTime.String()), zap.Bool("reply_requested", pkm.ReplyRequested))
-				if pkm.ServerWALEnd > clientXLogPos {
-					clientXLogPos = pkm.ServerWALEnd
-				}
-				if pkm.ReplyRequested {
-					err := pglogrepl.SendStandbyStatusUpdate(context.Background(), p.replicationConn, pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos})
-					if err != nil {
-						p.logger.Error("SendStandbyStatusUpdate failed", zap.Error(err))
-						continue
-					}
-					p.logger.Info("sent standby status message", zap.String("xlog_pos", clientXLogPos.String()))
-				}
-			case pglogrepl.XLogDataByteID:
-				xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
-				if err != nil {
-					p.logger.Error("failed to parse xlog data", zap.Error(err))
-					continue
-				}
-
-				p.logger.Info("received xlog data", zap.String("wal_start", xld.WALStart.String()), zap.String("server_wal_end", xld.ServerWALEnd.String()), zap.String("server_time", xld.ServerTime.String()))
-				err = p.processData(xld.WALData, relationsV2, &inStream, sub)
-				if err != nil {
-					p.logger.Error("failed to process data", zap.Error(err))
-					continue
-				}
-
-				// Only update position after successfully processing
-				// WALStart is the position of this record - we've now processed it
-				if xld.WALStart > clientXLogPos {
-					clientXLogPos = xld.WALStart
-				}
-			}
+// Next returns the next message from PostgreSQL replication stream
+func (p *PostgresDatasource) Next(ctx context.Context) (*datasource.MessageWithPosition, error) {
+	// Initialize replication on first call
+	if !p.replicationStarted {
+		if err := p.startReplicationForNext(ctx); err != nil {
+			return nil, fmt.Errorf("start replication: %w", err)
 		}
+		p.replicationStarted = true
 	}
 
-	p.logger.Info("stop publishing", zap.String("slot_name", sub.slotName))
+	standByTimeout := p.cfg.StandByTimeout
+	lastStatusUpdate := time.Now()
+
+	for {
+		// Send periodic standby status updates
+		if time.Since(lastStatusUpdate) >= standByTimeout {
+			if err := pglogrepl.SendStandbyStatusUpdate(context.Background(), p.replicationConn,
+				pglogrepl.StandbyStatusUpdate{WALFlushPosition: p.lastConfirmedPosition}); err != nil {
+				p.logger.Error("SendStandbyStatusUpdate failed", zap.Error(err))
+			} else {
+				p.logger.Debug("sent standby status message", zap.String("xlog_pos", p.lastConfirmedPosition.String()))
+				lastStatusUpdate = time.Now()
+			}
+		}
+
+		// Receive message with timeout
+		receiveCtx, cancel := context.WithTimeout(ctx, standByTimeout)
+		rawMsg, err := p.replicationConn.ReceiveMessage(receiveCtx)
+		cancel()
+
+		if err != nil {
+			if pgconn.Timeout(err) {
+				// Check if context is cancelled
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+					continue
+				}
+			}
+			return nil, fmt.Errorf("receive message: %w", err)
+		}
+
+		if errMsg, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
+			return nil, fmt.Errorf("postgres WAL error: %v", errMsg)
+		}
+
+		msg, ok := rawMsg.(*pgproto3.CopyData)
+		if !ok || len(msg.Data) == 0 {
+			continue
+		}
+
+		switch msg.Data[0] {
+		case pglogrepl.PrimaryKeepaliveMessageByteID:
+			pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
+			if err != nil {
+				p.logger.Error("failed to parse primary keepalive message", zap.Error(err))
+				continue
+			}
+			p.logger.Debug("received primary keepalive message",
+				zap.String("server_wal_end", pkm.ServerWALEnd.String()),
+				zap.Bool("reply_requested", pkm.ReplyRequested))
+
+			if pkm.ServerWALEnd > p.clientXLogPos {
+				p.clientXLogPos = pkm.ServerWALEnd
+			}
+
+			if pkm.ReplyRequested {
+				if err := pglogrepl.SendStandbyStatusUpdate(context.Background(), p.replicationConn,
+					pglogrepl.StandbyStatusUpdate{WALFlushPosition: p.lastConfirmedPosition}); err != nil {
+					p.logger.Error("SendStandbyStatusUpdate failed", zap.Error(err))
+				} else {
+					lastStatusUpdate = time.Now()
+				}
+			}
+
+		case pglogrepl.XLogDataByteID:
+			xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
+			if err != nil {
+				p.logger.Error("failed to parse xlog data", zap.Error(err))
+				continue
+			}
+
+			p.logger.Debug("received xlog data",
+				zap.String("wal_start", xld.WALStart.String()),
+				zap.String("server_wal_end", xld.ServerWALEnd.String()))
+
+			dataMsg, err := p.processDataForNext(xld.WALData)
+			if err != nil {
+				p.logger.Error("failed to process data", zap.Error(err))
+				continue
+			}
+
+			// Update position - but don't confirm until Commit() is called
+			if xld.WALStart > p.clientXLogPos {
+				p.clientXLogPos = xld.WALStart
+			}
+
+			// Skip if message was filtered out
+			if dataMsg == nil {
+				continue
+			}
+
+			return &datasource.MessageWithPosition{
+				Message:  *dataMsg,
+				Position: xld.WALStart,
+			}, nil
+		}
+	}
+}
+
+// Commit confirms that messages up to the given position have been successfully processed
+func (p *PostgresDatasource) Commit(ctx context.Context, position interface{}) error {
+	lsn, ok := position.(pglogrepl.LSN)
+	if !ok {
+		return fmt.Errorf("invalid position type: expected pglogrepl.LSN, got %T", position)
+	}
+
+	p.lastConfirmedPosition = lsn
+	p.logger.Debug("committed position", zap.String("lsn", lsn.String()))
+
+	// Send standby status update to confirm the position
+	if err := pglogrepl.SendStandbyStatusUpdate(context.Background(), p.replicationConn,
+		pglogrepl.StandbyStatusUpdate{WALFlushPosition: lsn}); err != nil {
+		return fmt.Errorf("send standby status update: %w", err)
+	}
+
 	return nil
 }
 
-func (p *PostgresDatasource) extractData(rel *pglogrepl.RelationMessageV2, dataColumns []*pglogrepl.TupleDataColumn, sub *subscription) (map[string]interface{}, error) {
+func (p *PostgresDatasource) startReplicationForNext(ctx context.Context) error {
+	// Use configured slot or create temporary one
+	if p.cfg.ReplicationSlot != "" {
+		p.slotName = p.cfg.ReplicationSlot
+	} else {
+		randomBytes := make([]byte, 8)
+		if _, err := rand.Read(randomBytes); err != nil {
+			return fmt.Errorf("generate random slot name: %w", err)
+		}
+		p.slotName = fmt.Sprintf("replica_%x", randomBytes)
+		_, err := pglogrepl.CreateReplicationSlot(ctx, p.replicationConn, p.slotName, "pgoutput",
+			pglogrepl.CreateReplicationSlotOptions{Temporary: true})
+		if err != nil {
+			return fmt.Errorf("create replication slot: %w", err)
+		}
+		p.logger.Info("created temporary replication slot", zap.String("slot_name", p.slotName))
+	}
+
+	// Get confirmed_flush_lsn from the slot if it exists
+	var confirmedLSN pglogrepl.LSN
+	err := p.conn.QueryRow(ctx,
+		"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = $1",
+		p.slotName).Scan(&confirmedLSN)
+	if err != nil {
+		p.logger.Warn("could not get confirmed_flush_lsn, starting from current position",
+			zap.String("slot_name", p.slotName), zap.Error(err))
+	}
+
+	startPos := p.sysident.XLogPos
+	if confirmedLSN > 0 {
+		startPos = confirmedLSN
+		p.logger.Info("resuming from confirmed position", zap.String("lsn", confirmedLSN.String()))
+	}
+
+	p.clientXLogPos = startPos
+	p.lastConfirmedPosition = startPos
+
+	pluginArguments := []string{
+		"proto_version '2'",
+		fmt.Sprintf("publication_names '%s'", strings.Join(p.publications, ",")),
+		"messages 'true'",
+	}
+
+	if err := pglogrepl.StartReplication(ctx, p.replicationConn, p.slotName, startPos,
+		pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments}); err != nil {
+		return fmt.Errorf("start replication: %w", err)
+	}
+
+	p.logger.Info("started replication", zap.String("slot_name", p.slotName), zap.String("start_pos", startPos.String()))
+	return nil
+}
+
+func (p *PostgresDatasource) processDataForNext(walData []byte) (*datasource.Message, error) {
+	logicalMsg, err := pglogrepl.ParseV2(walData, p.inStream)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse logical replication message: %w", err)
+	}
+
+	p.logger.Debug("received logical replication message", zap.String("type", logicalMsg.Type().String()))
+
+	switch logicalMsg := logicalMsg.(type) {
+	case *pglogrepl.InsertMessageV2:
+		return p.processInsertForNext(logicalMsg)
+	case *pglogrepl.UpdateMessageV2:
+		return p.processUpdateForNext(logicalMsg)
+	case *pglogrepl.DeleteMessageV2:
+		return p.processDeleteForNext(logicalMsg)
+	case *pglogrepl.RelationMessageV2:
+		p.relationsV2[logicalMsg.RelationID] = logicalMsg
+		p.logger.Debug("stored relation message", zap.Uint32("relation_id", logicalMsg.RelationID),
+			zap.String("namespace", logicalMsg.Namespace), zap.String("relation_name", logicalMsg.RelationName))
+		return nil, nil
+	default:
+		p.logger.Debug("skipping message", zap.String("type", logicalMsg.Type().String()))
+		return nil, nil
+	}
+}
+
+func (p *PostgresDatasource) processInsertForNext(logicalMsg *pglogrepl.InsertMessageV2) (*datasource.Message, error) {
+	rel, ok := p.relationsV2[logicalMsg.RelationID]
+	if !ok {
+		return nil, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
+	}
+
+	values, err := p.extractDataForNext(rel, logicalMsg.Tuple.Columns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract data: %w", err)
+	}
+
+	// Filtered out
+	if values == nil {
+		return nil, nil
+	}
+
+	data, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %w", err)
+	}
+
+	return &datasource.Message{
+		ID:         uuid.New(),
+		Op:         datasource.Insert,
+		Data:       data,
+		Collection: rel.RelationName,
+	}, nil
+}
+
+func (p *PostgresDatasource) processUpdateForNext(logicalMsg *pglogrepl.UpdateMessageV2) (*datasource.Message, error) {
+	rel, ok := p.relationsV2[logicalMsg.RelationID]
+	if !ok {
+		return nil, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
+	}
+
+	values, err := p.extractDataForNext(rel, logicalMsg.NewTuple.Columns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract data: %w", err)
+	}
+
+	// Filtered out
+	if values == nil {
+		return nil, nil
+	}
+
+	data, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %w", err)
+	}
+
+	return &datasource.Message{
+		ID:         uuid.New(),
+		Op:         datasource.Update,
+		Data:       data,
+		Collection: rel.RelationName,
+	}, nil
+}
+
+func (p *PostgresDatasource) processDeleteForNext(logicalMsg *pglogrepl.DeleteMessageV2) (*datasource.Message, error) {
+	rel, ok := p.relationsV2[logicalMsg.RelationID]
+	if !ok {
+		return nil, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
+	}
+
+	values, err := p.extractDataForNext(rel, logicalMsg.OldTuple.Columns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract data: %w", err)
+	}
+
+	// Filtered out
+	if values == nil {
+		return nil, nil
+	}
+
+	data, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %w", err)
+	}
+
+	return &datasource.Message{
+		ID:         uuid.New(),
+		Op:         datasource.Delete,
+		Data:       data,
+		Collection: rel.RelationName,
+	}, nil
+}
+
+func (p *PostgresDatasource) extractDataForNext(rel *pglogrepl.RelationMessageV2, dataColumns []*pglogrepl.TupleDataColumn) (map[string]interface{}, error) {
 	var matchedMapping *datasource.ReadConfigMapping
-	if !sub.ReadConfig.AllCollections {
-		// check if the collection is in the mapping
-		for _, m := range sub.ReadConfig.Mapping {
+	if !p.readConfig.AllCollections {
+		for _, m := range p.readConfig.Mapping {
 			if m.Collection == rel.RelationName {
 				matchedMapping = &m
 				break
 			}
 		}
-		// if the collection is not in the mapping, skip the insert
+		// If the collection is not in the mapping, skip
 		if matchedMapping == nil {
-			p.logger.Debug("skipping insert for xid", zap.String("namespace", rel.Namespace), zap.String("relation_name", rel.RelationName))
+			p.logger.Debug("skipping for collection", zap.String("namespace", rel.Namespace), zap.String("relation_name", rel.RelationName))
 			return nil, nil
 		}
 	}
@@ -334,7 +490,7 @@ func (p *PostgresDatasource) extractData(rel *pglogrepl.RelationMessageV2, dataC
 		case 'n': // null
 			values[colName] = nil
 		case 'u': // unchanged toast
-			// This TOAST value was not changed. TOAST values are not stored in the tuple, and logical replication doesn't want to spend a disk read to fetch its value for you.
+			// Skip
 		case 't': // text
 			val, err := decodeTextColumnData(col.Data, rel.Columns[idx].DataType)
 			if err != nil {
@@ -346,14 +502,13 @@ func (p *PostgresDatasource) extractData(rel *pglogrepl.RelationMessageV2, dataC
 
 	if matchedMapping != nil {
 		for k := range values {
-			// check if the field is in the mapping
 			var matchedFieldMapping *datasource.ReadConfigFieldMapping
 			for _, m := range matchedMapping.Fields {
 				if m.Field == k {
 					matchedFieldMapping = &m
 				}
 			}
-			// if the field is not in the mapping, skip the field
+			// If the field is not in the mapping, skip the field
 			if matchedFieldMapping == nil && !matchedMapping.AllFields {
 				p.logger.Debug("skipping field", zap.String("field", k))
 				delete(values, k)
@@ -362,123 +517,4 @@ func (p *PostgresDatasource) extractData(rel *pglogrepl.RelationMessageV2, dataC
 	}
 
 	return values, nil
-}
-
-func (p *PostgresDatasource) processInsert(logicalMsg *pglogrepl.InsertMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) (datasource.Message, error) {
-	rel, ok := relations[logicalMsg.RelationID]
-	if !ok {
-		return datasource.Message{}, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
-	}
-
-	values, err := p.extractData(rel, logicalMsg.Tuple.Columns, sub)
-	if err != nil {
-		return datasource.Message{}, fmt.Errorf("failed to extract data: %w", err)
-	}
-
-	p.logger.Debug("insert for xid", zap.Uint32("xid", logicalMsg.Xid), zap.String("namespace", rel.Namespace), zap.String("relation_name", rel.RelationName), zap.Any("values", values))
-	data, err := json.Marshal(values)
-	if err != nil {
-		return datasource.Message{}, fmt.Errorf("failed to marshal data: %w", err)
-	}
-	return datasource.Message{Op: datasource.Insert, Data: data, Collection: rel.RelationName}, nil
-}
-
-func (p *PostgresDatasource) processUpdate(logicalMsg *pglogrepl.UpdateMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) (datasource.Message, error) {
-	p.logger.Debug("update message", zap.Uint32("xid", logicalMsg.Xid),
-		zap.Any("old_tuple", logicalMsg.OldTuple), zap.Any("new_tuple", logicalMsg.NewTuple))
-	rel, ok := relations[logicalMsg.RelationID]
-	if !ok {
-		return datasource.Message{}, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
-	}
-
-	values, err := p.extractData(rel, logicalMsg.NewTuple.Columns, sub)
-	if err != nil {
-		return datasource.Message{}, fmt.Errorf("failed to extract data: %w", err)
-	}
-
-	data, err := json.Marshal(values)
-	if err != nil {
-		return datasource.Message{}, fmt.Errorf("failed to marshal data: %w", err)
-	}
-
-	return datasource.Message{Op: datasource.Update, Data: data, Collection: rel.RelationName}, nil
-}
-
-func (p *PostgresDatasource) processDelete(logicalMsg *pglogrepl.DeleteMessageV2, relations map[uint32]*pglogrepl.RelationMessageV2, sub *subscription) (datasource.Message, error) {
-	rel, ok := relations[logicalMsg.RelationID]
-	if !ok {
-		return datasource.Message{}, fmt.Errorf("could not find relation for relation ID %d", logicalMsg.RelationID)
-	}
-
-	p.logger.Debug("delete for xid", zap.Uint32("xid", logicalMsg.Xid),
-		zap.String("namespace", rel.Namespace),
-		zap.String("relation_name", rel.RelationName),
-	)
-
-	values, err := p.extractData(rel, logicalMsg.OldTuple.Columns, sub)
-	if err != nil {
-		return datasource.Message{}, fmt.Errorf("failed to extract data: %w", err)
-	}
-
-	data, err := json.Marshal(values)
-	if err != nil {
-		return datasource.Message{}, fmt.Errorf("failed to marshal data: %w", err)
-	}
-
-	return datasource.Message{Op: datasource.Delete, Data: data, Collection: rel.RelationName}, nil
-}
-
-func (p *PostgresDatasource) processData(walData []byte, relations map[uint32]*pglogrepl.RelationMessageV2, inStream *bool, sub *subscription) error {
-	logicalMsg, err := pglogrepl.ParseV2(walData, *inStream)
-	if err != nil {
-		return fmt.Errorf("failed to parse logical replication message: %w", err)
-	}
-
-	p.logger.Debug("received logical replication message", zap.String("type", logicalMsg.Type().String()))
-	msg := datasource.Message{
-		ID: uuid.New(),
-	}
-	switch logicalMsg := logicalMsg.(type) {
-	case *pglogrepl.InsertMessageV2:
-		msg, err = p.processInsert(logicalMsg, relations, sub)
-		if err != nil {
-			return fmt.Errorf("failed to process insert: %w", err)
-		}
-	case *pglogrepl.UpdateMessageV2:
-		msg, err = p.processUpdate(logicalMsg, relations, sub)
-		if err != nil {
-			return fmt.Errorf("failed to process update: %w", err)
-		}
-	case *pglogrepl.DeleteMessageV2:
-		msg, err = p.processDelete(logicalMsg, relations, sub)
-		if err != nil {
-			return fmt.Errorf("failed to process delete: %w", err)
-		}
-	case *pglogrepl.RelationMessageV2:
-		relations[logicalMsg.RelationID] = logicalMsg
-		p.logger.Debug("stored relation message", zap.Uint32("relation_id", logicalMsg.RelationID),
-			zap.String("namespace", logicalMsg.Namespace), zap.String("relation_name", logicalMsg.RelationName))
-		// return early as we don't need to send anything to the subscription channel
-		return nil
-	default:
-		p.logger.Debug("skipping message", zap.String("type", logicalMsg.Type().String()))
-		return nil
-	}
-
-	// Blocking send to ensure no messages are dropped
-	// This provides backpressure to PostgreSQL if consumer is slow
-	sub.Ch <- msg
-	p.logger.Debug("sent message to the channel", zap.String("collection", msg.Collection),
-		zap.String("operation", string(msg.Op)), zap.String("message-id", string(msg.ID.String())))
-
-	return nil
-}
-
-var typeMap = pgtype.NewMap()
-
-func decodeTextColumnData(data []byte, dataType uint32) (interface{}, error) {
-	if dt, ok := typeMap.TypeForOID(dataType); ok {
-		return dt.Codec.DecodeValue(typeMap, dataType, pgtype.TextFormatCode, data)
-	}
-	return string(data), nil
 }

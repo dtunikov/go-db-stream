@@ -33,8 +33,14 @@ host all all 0.0.0.0/0 md5
 ```
 Restart the postgres service after making these changes.
 
-In our example we're using super user 'postgres' to connect to the database and create a publication. It's not recommented in production environment, instead you should create a new user with replication privileges and use that user to connect to the database.
+In this example we create temporary replication slot and publication when go-db-stream starts. This is not recommended in production environment. Instead, you should create replication slot and publication as a part of your database migration process.
+Without persistent replication slot, you may lose data if the go-db-stream service is restarted.
+
 - connect to your database
+- create a replication slot
+```shell
+SELECT pg_create_logical_replication_slot('example_slot', 'pgoutput');
+```
 - create a new user with replication privileges
 ```shell
 CREATE USER <username> WITH REPLICATION PASSWORD '<password>';
@@ -48,7 +54,7 @@ grant all on schema public to <username>;
 host replication pglogrepl 0.0.0.0/0 md5
 ```
 
-In our example we create a publication for all tables (see config.yaml postgres configuration):
+In this example we also create a publication for all tables (see config.yaml postgres configuration):
 ```shell
 CREATE PUBLICATION example_publication FOR ALL TABLES;
 ```

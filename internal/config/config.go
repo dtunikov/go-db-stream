@@ -100,6 +100,10 @@ type Connector struct {
 	To             string             `yaml:"to"`
 	AllCollections bool               `yaml:"allCollections" envDefault:"true"`
 	Mapping        []ConnectorMapping `yaml:"mapping"`
+	// BatchSize is the number of messages to batch before committing
+	BatchSize int `yaml:"batchSize" envDefault:"2"`
+	// BatchTimeout is the maximum time to wait before committing a partial batch
+	BatchTimeout time.Duration `yaml:"batchTimeout" envDefault:"5s"`
 }
 
 type Log struct {

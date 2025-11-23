@@ -188,6 +188,17 @@
               "mapping": {
                 "type": "object",
                 "description": "Mapping of collections from the source datasource to the target datasource."
+              },
+              "batchSize": {
+                "type": "integer",
+                "description": "Number of messages to batch before committing to the source datasource. Higher values improve throughput but increase potential duplicate processing on failure.",
+                "default": 100,
+                "minimum": 1
+              },
+              "batchTimeout": {
+                "type": "string",
+                "description": "Maximum time to wait before committing a partial batch. Ensures timely processing even with low message volume.",
+                "default": "5s"
               }
             }
           }

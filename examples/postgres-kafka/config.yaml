@@ -10,7 +10,7 @@ executor:
         # ensure that postgres user has permission to create publication. 
         # In production it's better to create publications as a part of your database schema migration.
         createPublications: ['CREATE PUBLICATION example_publication FOR ALL TABLES;']
-        # replicationSlot: 'test_slot' # if not set, tmp slot will be created. Same as with publication, it's better to create slots as a part of your database schema migration.
+        # replicationSlot: 'example_slot' # if not set, tmp slot will be created. Same as with publication, it's better to create slots as a part of your database schema migration.
 
     - id: kafka1
       kafka:
@@ -23,3 +23,5 @@ executor:
       to: kafka1
       # default behaviour is to stream all tables that are part of the publication for "from" datasource
       allCollections: true
+      batchSize: 2
+      batchTimeout: 5s

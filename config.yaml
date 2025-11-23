@@ -20,6 +20,8 @@ executor:
       from: postgres1
       to: kafka1
       allCollections: true
+      batchSize: 2
+      batchTimeout: 5s
       # only stream specific tables (default behaviour is to stream all tables)
       # mapping:
       #   - from: users
